@@ -19,13 +19,12 @@ function App() {
     // Load saved settings on app start
     loadSettings();
 
-    // Initialize HealthKit
+    // Initialize HealthKit (not available on Simulator)
     initHealthKit()
-      .then(() => {
-        setHealthKitAuthorized(true);
+      .then(authorized => {
+        setHealthKitAuthorized(authorized);
       })
-      .catch(error => {
-        console.error('HealthKit auth failed:', error);
+      .catch(() => {
         setHealthKitAuthorized(false);
       });
   }, [loadSettings, setHealthKitAuthorized]);

@@ -18,6 +18,7 @@ import {
 } from '../services/ZoneEngine';
 import {getWorkoutsWithHeartRate} from '../services/HealthKitService';
 import {WeeklyZoneData, ZoneTimeEntry} from '../types';
+import {LABEL_TOTAL_ALL_SHORT, LABEL_COMBINED_SHORT} from '../utils/constants';
 
 const WEEKS_TO_SHOW = 12;
 
@@ -29,7 +30,7 @@ interface WeekSummary {
 }
 
 const TrendsScreen: React.FC = () => {
-  const {settings, isHealthKitAuthorized} = useStore();
+  const {settings, isHealthKitAuthorized, getRestingHRForDate} = useStore();
   const [weekSummaries, setWeekSummaries] = useState<WeekSummary[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [selectedZoneFilter, setSelectedZoneFilter] = useState<number | null>(
@@ -43,7 +44,6 @@ const TrendsScreen: React.FC = () => {
 
     setIsLoading(true);
     try {
-      const boundaries = calculateZoneBoundaries(settings);
       const summaries: WeekSummary[] = [];
 
       for (let offset = 0; offset > -WEEKS_TO_SHOW; offset--) {
@@ -55,6 +55,14 @@ const TrendsScreen: React.FC = () => {
         const allZoneTimes: ZoneTimeEntry[][] = [];
         workouts.forEach(workout => {
           if (workout.heartRateSamples.length > 0) {
+            // Use per-day resting HR for zone boundaries (matches Dashboard)
+            const dateStr = workout.startDate.toISOString().split('T')[0];
+            const dayRestingHR = getRestingHRForDate(dateStr);
+            const daySettings = {
+              ...settings,
+              restingHeartRate: dayRestingHR,
+            };
+            const boundaries = calculateZoneBoundaries(daySettings);
             const zoneTime = calculateZoneTime(
               workout.heartRateSamples,
               boundaries,
@@ -87,16 +95,8 @@ const TrendsScreen: React.FC = () => {
     loadTrends();
   }, [loadTrends]);
 
-  const formatMinutes = (mins: number): string => {
-    if (mins < 1) {
-      return `${Math.round(mins * 60)}s`;
-    }
-    const hours = Math.floor(mins / 60);
-    const remaining = Math.round(mins % 60);
-    if (hours > 0) {
-      return `${hours}h ${remaining}m`;
-    }
-    return `${remaining}m`;
+  const formatMins = (mins: number): string => {
+    return `${Math.round(mins)} min`;
   };
 
   const getZoneById = (zoneId: number) =>
@@ -158,7 +158,7 @@ const TrendsScreen: React.FC = () => {
                 styles.filterText,
                 selectedZoneFilter === zone.id && styles.filterTextActive,
               ]}>
-              {zone.name}
+              {`Zone ${zone.id}`}
             </Text>
           </TouchableOpacity>
         ))}
@@ -227,9 +227,23 @@ const TrendsScreen: React.FC = () => {
                     </View>
                   )}
                 </View>
-                <Text style={styles.trendValue}>
-                  {formatMinutes(displayMinutes)}
-                </Text>
+                <View style={styles.trendTotals}>
+                  <Text style={styles.trendTotalLeft}>
+                    {LABEL_TOTAL_ALL_SHORT} {formatMins(week.totalMinutes)}
+                  </Text>
+                  <Text style={styles.trendTotalCenter}>
+                    {LABEL_COMBINED_SHORT}{' '}
+                    {formatMins(
+                      week.totals
+                        .filter(e => e.zoneId <= 2)
+                        .reduce((s, e) => s + e.minutes, 0) +
+                        2 *
+                          week.totals
+                            .filter(e => e.zoneId >= 3)
+                            .reduce((s, e) => s + e.minutes, 0),
+                    )}
+                  </Text>
+                </View>
               </View>
             );
           })}
@@ -335,10 +349,21 @@ const styles = StyleSheet.create({
   trendBarSegment: {
     height: '100%',
   },
-  trendValue: {
+  trendTotals: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 4,
+  },
+  trendTotalLeft: {
+    color: '#94A3B8',
+    fontSize: 11,
+  },
+  trendTotalCenter: {
     color: '#64748B',
     fontSize: 11,
-    marginTop: 2,
+    textAlign: 'center',
+    flex: 1,
   },
 });
 

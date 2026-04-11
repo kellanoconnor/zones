@@ -44,3 +44,11 @@ export const DEFAULT_RESTING_HR = 60;
 
 // Days of the week starting Sunday
 export const DAYS_OF_WEEK = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+// Total labels — full (Dashboard Weekly) and short (Trends)
+export const LABEL_TOTAL_ALL = 'Total (Zone 1 and above):';
+export const LABEL_TOTAL_ALL_SHORT = 'Total (Zone 1+):';
+export const LABEL_TOTAL_Z3_PLUS = 'Total (Zone 3 and above):';
+export const LABEL_TOTAL_Z3_PLUS_SHORT = 'Total (Zone 3+):';
+export const LABEL_COMBINED = 'Combined Total (Moderate + Vigorous):';
+export const LABEL_COMBINED_SHORT = 'Combined Total (Mod + Vig):';

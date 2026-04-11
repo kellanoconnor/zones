@@ -43,6 +43,13 @@ export interface DailyZoneData {
   date: string; // ISO date string (YYYY-MM-DD)
   zoneTime: ZoneTimeEntry[];
   totalMinutes: number;
+  restingHR?: number; // The resting HR used for zone calculations on this day
+}
+
+export interface DailyRestingHR {
+  date: string; // ISO date string (YYYY-MM-DD)
+  restingHR: number; // Waking heart rate for this day
+  locked: boolean; // Once a day is complete, this is locked
 }
 
 export interface WeeklyZoneData {

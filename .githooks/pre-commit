@@ -1,0 +1,12 @@
+#!/bin/sh
+echo "Running tests before commit..."
+/usr/local/bin/node node_modules/.bin/jest --testPathIgnorePatterns='__tests__/App' 2>&1
+
+if [ $? -ne 0 ]; then
+  echo ""
+  echo "❌ Tests failed. Commit blocked."
+  echo "Fix the failing tests and try again."
+  exit 1
+fi
+
+echo "✅ All tests passed."

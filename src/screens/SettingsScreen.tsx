@@ -1,4 +1,4 @@
-import React, {useCallback} from 'react';
+import React, {useCallback, useState, useEffect} from 'react';
 import {
   View,
   Text,
@@ -12,15 +12,29 @@ import useStore from '../store/useStore';
 import {calculateTHR, calculateHRR} from '../services/ZoneEngine';
 
 const SettingsScreen: React.FC = () => {
-  const {settings, setMaxHeartRate, setRestingHeartRate, updateZone, saveSettings, resetToDefaults} =
+  const {settings, setMaxHeartRate, setRestingHeartRate, updateZone, saveSettings, resetToDefaults, todayRestingHR} =
     useStore();
+
+  const [maxHRInput, setMaxHRInput] = useState(String(settings.maxHeartRate));
+  const [restingHRInput, setRestingHRInput] = useState(String(settings.restingHeartRate));
+  const [maxHRWarning, setMaxHRWarning] = useState<string | null>(null);
+  const [restingHRWarning, setRestingHRWarning] = useState<string | null>(null);
+
+  // Sync resting HR input when auto-updated from HealthKit
+  useEffect(() => {
+    setRestingHRInput(String(settings.restingHeartRate));
+  }, [settings.restingHeartRate]);
 
   const hrr = calculateHRR(settings.maxHeartRate, settings.restingHeartRate);
 
   const handleSave = useCallback(async () => {
+    if (maxHRWarning || restingHRWarning) {
+      Alert.alert('Invalid Settings', 'Please fix the warnings before saving.');
+      return;
+    }
     await saveSettings();
     Alert.alert('Saved', 'Your settings have been saved.');
-  }, [saveSettings]);
+  }, [saveSettings, maxHRWarning, restingHRWarning]);
 
   const handleReset = useCallback(() => {
     Alert.alert(
@@ -33,22 +47,57 @@ const SettingsScreen: React.FC = () => {
           style: 'destructive',
           onPress: () => {
             resetToDefaults();
+            setMaxHRInput('190');
+            setRestingHRInput('60');
+            setMaxHRWarning(null);
+            setRestingHRWarning(null);
           },
         },
       ],
     );
   }, [resetToDefaults]);
 
-  const handleNumberInput = (
-    value: string,
-    setter: (n: number) => void,
-    min: number,
-    max: number,
-  ) => {
+  const validateMaxHR = (value: string) => {
     const num = parseInt(value, 10);
-    if (!isNaN(num) && num >= min && num <= max) {
-      setter(num);
+    if (isNaN(num)) {
+      setMaxHRWarning('Please enter a valid number');
+      return;
     }
+    if (num < 60 || num > 220) {
+      setMaxHRWarning('Max HR must be between 60 and 220 bpm');
+      return;
+    }
+    if (num <= settings.restingHeartRate) {
+      setMaxHRWarning('Max HR must be greater than Resting HR');
+      return;
+    }
+    setMaxHRWarning(null);
+    setMaxHeartRate(num);
+    // Re-validate resting HR since max changed
+    const restNum = parseInt(restingHRInput, 10);
+    if (!isNaN(restNum) && restNum >= num) {
+      setRestingHRWarning('Resting HR must be less than Max HR');
+    } else if (!isNaN(restNum) && restNum >= 40 && restNum <= 90) {
+      setRestingHRWarning(null);
+    }
+  };
+
+  const validateRestingHR = (value: string) => {
+    const num = parseInt(value, 10);
+    if (isNaN(num)) {
+      setRestingHRWarning('Please enter a valid number');
+      return;
+    }
+    if (num < 40 || num > 90) {
+      setRestingHRWarning('Resting HR must be between 40 and 90 bpm');
+      return;
+    }
+    if (num >= settings.maxHeartRate) {
+      setRestingHRWarning('Resting HR must be less than Max HR');
+      return;
+    }
+    setRestingHRWarning(null);
+    setRestingHeartRate(num);
   };
 
   return (
@@ -62,30 +111,41 @@ const SettingsScreen: React.FC = () => {
         <View style={styles.inputRow}>
           <Text style={styles.inputLabel}>Max Heart Rate (bpm)</Text>
           <TextInput
-            style={styles.input}
+            style={[styles.input, maxHRWarning ? styles.inputError : null]}
             keyboardType="number-pad"
-            value={String(settings.maxHeartRate)}
-            onChangeText={v =>
-              handleNumberInput(v, setMaxHeartRate, 100, 250)
-            }
+            value={maxHRInput}
+            onChangeText={setMaxHRInput}
+            onBlur={() => validateMaxHR(maxHRInput)}
             placeholder="190"
             placeholderTextColor="#475569"
           />
         </View>
+        {maxHRWarning && (
+          <Text style={styles.warningText}>{maxHRWarning}</Text>
+        )}
 
         <View style={styles.inputRow}>
-          <Text style={styles.inputLabel}>Resting Heart Rate (bpm)</Text>
+          <View style={styles.inputLabelGroup}>
+            <Text style={styles.inputLabel}>Resting Heart Rate (bpm)</Text>
+            {todayRestingHR !== null && (
+              <Text style={styles.autoUpdateNote}>
+                Auto-updated from waking HR
+              </Text>
+            )}
+          </View>
           <TextInput
-            style={styles.input}
+            style={[styles.input, restingHRWarning ? styles.inputError : null]}
             keyboardType="number-pad"
-            value={String(settings.restingHeartRate)}
-            onChangeText={v =>
-              handleNumberInput(v, setRestingHeartRate, 30, 120)
-            }
+            value={restingHRInput}
+            onChangeText={setRestingHRInput}
+            onBlur={() => validateRestingHR(restingHRInput)}
             placeholder="60"
             placeholderTextColor="#475569"
           />
         </View>
+        {restingHRWarning && (
+          <Text style={styles.warningText}>{restingHRWarning}</Text>
+        )}
 
         <View style={styles.hrrDisplay}>
           <Text style={styles.hrrLabel}>Heart Rate Reserve (HRR)</Text>
@@ -97,8 +157,7 @@ const SettingsScreen: React.FC = () => {
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Zone Configuration</Text>
         <Text style={styles.sectionSubtitle}>
-          Adjust intensity percentages for each zone. THR values update
-          automatically using the Karvonen Formula.
+          Zone boundaries are calculated using the Karvonen Formula based on your Max and Resting heart rates.
         </Text>
 
         {settings.zones.map(zone => {
@@ -120,85 +179,28 @@ const SettingsScreen: React.FC = () => {
                   style={[styles.zoneDot, {backgroundColor: zone.color}]}
                 />
                 <Text style={styles.zoneName}>
-                  Zone {zone.id}: {zone.name}
+                  Zone {zone.id}
                 </Text>
               </View>
 
               <View style={styles.zoneInputs}>
                 <View style={styles.zoneInputGroup}>
-                  <Text style={styles.zoneInputLabel}>Lower %</Text>
-                  <TextInput
-                    style={styles.zoneInput}
-                    keyboardType="number-pad"
-                    value={String(zone.lowerIntensity)}
-                    onChangeText={v => {
-                      const num = parseInt(v, 10);
-                      if (!isNaN(num) && num >= 0 && num <= 100) {
-                        updateZone(zone.id, {lowerIntensity: num});
-                      }
-                    }}
-                    placeholderTextColor="#475569"
-                  />
+                  <Text style={styles.zoneInputLabel}>Lower</Text>
+                  <Text style={styles.zonePercentLocked}>{zone.lowerIntensity}%</Text>
                   <Text style={styles.thrPreview}>{lowerTHR} bpm</Text>
                 </View>
 
                 <Text style={styles.zoneDash}>–</Text>
 
                 <View style={styles.zoneInputGroup}>
-                  <Text style={styles.zoneInputLabel}>Upper %</Text>
-                  <TextInput
-                    style={styles.zoneInput}
-                    keyboardType="number-pad"
-                    value={String(zone.upperIntensity)}
-                    onChangeText={v => {
-                      const num = parseInt(v, 10);
-                      if (!isNaN(num) && num >= 0 && num <= 100) {
-                        updateZone(zone.id, {upperIntensity: num});
-                      }
-                    }}
-                    placeholderTextColor="#475569"
-                  />
+                  <Text style={styles.zoneInputLabel}>Upper</Text>
+                  <Text style={styles.zonePercentLocked}>{zone.upperIntensity}%</Text>
                   <Text style={styles.thrPreview}>{upperTHR} bpm</Text>
                 </View>
               </View>
             </View>
           );
         })}
-      </View>
-
-      {/* Weekly Goals */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Weekly Goals</Text>
-        <Text style={styles.sectionSubtitle}>
-          Set target minutes per zone per week. Leave blank for no goal.
-        </Text>
-
-        {settings.zones.map(zone => (
-          <View key={zone.id} style={styles.goalRow}>
-            <View style={styles.goalLabel}>
-              <View
-                style={[styles.zoneDot, {backgroundColor: zone.color}]}
-              />
-              <Text style={styles.goalName}>{zone.name}</Text>
-            </View>
-            <View style={styles.goalInputWrapper}>
-              <TextInput
-                style={styles.goalInput}
-                keyboardType="number-pad"
-                value={zone.goalMinutes ? String(zone.goalMinutes) : ''}
-                onChangeText={v => {
-                  const num = parseInt(v, 10);
-                  updateZone(zone.id, {
-                    goalMinutes: isNaN(num) ? undefined : num,
-                  });
-                }}
-                placeholder="—"
-                placeholderTextColor="#475569"
-              />
-              <Text style={styles.goalUnit}>min</Text>
-            </View>
-          </View>
-        ))}
       </View>
 
       {/* Action Buttons */}
@@ -253,9 +255,18 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#1E293B',
   },
+  inputLabelGroup: {
+    flex: 1,
+    marginRight: 12,
+  },
   inputLabel: {
     fontSize: 15,
     color: '#CBD5E1',
+  },
+  autoUpdateNote: {
+    fontSize: 11,
+    color: '#3B82F6',
+    marginTop: 2,
   },
   input: {
     backgroundColor: '#1E293B',
@@ -267,6 +278,17 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     minWidth: 80,
     textAlign: 'center',
+    borderWidth: 1,
+    borderColor: '#334155',
+  },
+  inputError: {
+    borderColor: '#EF4444',
+  },
+  warningText: {
+    color: '#EF4444',
+    fontSize: 12,
+    marginTop: 4,
+    paddingLeft: 4,
   },
   hrrDisplay: {
     flexDirection: 'row',
@@ -320,16 +342,11 @@ const styles = StyleSheet.create({
     color: '#64748B',
     marginBottom: 6,
   },
-  zoneInput: {
-    backgroundColor: '#0F172A',
-    color: '#F1F5F9',
+  zonePercentLocked: {
+    color: '#94A3B8',
     fontSize: 18,
     fontWeight: '600',
-    paddingHorizontal: 16,
     paddingVertical: 10,
-    borderRadius: 8,
-    minWidth: 70,
-    textAlign: 'center',
   },
   thrPreview: {
     fontSize: 12,
