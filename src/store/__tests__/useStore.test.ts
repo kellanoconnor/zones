@@ -104,7 +104,8 @@ describe('useStore', () => {
     });
 
     it('updates resting HR for same date (today, not yet locked)', () => {
-      const today = new Date().toISOString().split('T')[0];
+      const now = new Date();
+      const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
       useStore.getState().setDailyRestingHR(today, 50);
       useStore.getState().setDailyRestingHR(today, 48);
       const history = useStore.getState().restingHRHistory;
@@ -143,7 +144,21 @@ describe('useStore', () => {
       expect(useStore.getState().getRestingHRForDate('2026-04-07')).toBe(50);
     });
 
-    it('falls back to settings default for unknown date', () => {
+    it('falls back to most recent prior day when date has no entry', () => {
+      useStore.getState().setDailyRestingHR('2026-04-14', 46);
+      useStore.getState().setDailyRestingHR('2026-04-15', 48);
+      // Apr 16 has no entry — should use Apr 15's value (48)
+      expect(useStore.getState().getRestingHRForDate('2026-04-16')).toBe(48);
+    });
+
+    it('skips future entries when falling back', () => {
+      useStore.getState().setDailyRestingHR('2026-04-14', 46);
+      useStore.getState().setDailyRestingHR('2026-04-18', 50);
+      // Apr 16 has no entry — should use Apr 14 (46), not Apr 18
+      expect(useStore.getState().getRestingHRForDate('2026-04-16')).toBe(46);
+    });
+
+    it('falls back to settings default when no prior entries exist', () => {
       expect(useStore.getState().getRestingHRForDate('2099-01-01')).toBe(
         DEFAULT_RESTING_HR,
       );

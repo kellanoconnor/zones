@@ -45,6 +45,18 @@ export const DEFAULT_RESTING_HR = 60;
 // Days of the week starting Sunday
 export const DAYS_OF_WEEK = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
+/**
+ * Get a date string in YYYY-MM-DD format using LOCAL time (not UTC).
+ * This is critical — toISOString() converts to UTC which shifts the date
+ * after ~8 PM in US timezones, causing data to be stored under the wrong day.
+ */
+export function getLocalDateString(date: Date = new Date()): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 // Total labels — full (Dashboard Weekly) and short (Trends)
 export const LABEL_TOTAL_ALL = 'Total (Zone 1 and above):';
 export const LABEL_TOTAL_ALL_SHORT = 'Total (Zone 1+):';

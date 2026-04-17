@@ -19,7 +19,7 @@ import {
 } from '../services/ZoneEngine';
 import {getWorkoutsWithHeartRate, getWakingHeartRate} from '../services/HealthKitService';
 import {DailyZoneData, WeeklyZoneData, ZoneTimeEntry} from '../types';
-import {DAYS_OF_WEEK, LABEL_TOTAL_ALL_SHORT, LABEL_TOTAL_Z3_PLUS_SHORT, LABEL_COMBINED_SHORT} from '../utils/constants';
+import {DAYS_OF_WEEK, LABEL_TOTAL_ALL_SHORT, LABEL_TOTAL_Z3_PLUS_SHORT, LABEL_COMBINED_SHORT, getLocalDateString} from '../utils/constants';
 
 const DashboardScreen: React.FC = () => {
   const {
@@ -53,7 +53,7 @@ const DashboardScreen: React.FC = () => {
     try {
       await loadRestingHRHistory();
       const today = new Date();
-      const todayStr = today.toISOString().split('T')[0];
+      const todayStr = getLocalDateString(today);
 
       // Backfill past 6 days — fetch waking HR for any day not yet locked in history
       const {restingHRHistory} = useStore.getState();
@@ -63,7 +63,7 @@ const DashboardScreen: React.FC = () => {
       for (let i = 6; i >= 1; i--) {
         const pastDate = new Date(today);
         pastDate.setDate(today.getDate() - i);
-        const pastDateStr = pastDate.toISOString().split('T')[0];
+        const pastDateStr = getLocalDateString(pastDate);
         if (!lockedDates.has(pastDateStr)) {
           const pastWakingHR = await getWakingHeartRate(pastDate);
           if (pastWakingHR !== null) {
@@ -104,7 +104,7 @@ const DashboardScreen: React.FC = () => {
       for (let i = 0; i < 7; i++) {
         const day = new Date(weekStart);
         day.setDate(weekStart.getDate() + i);
-        const dateStr = day.toISOString().split('T')[0];
+        const dateStr = getLocalDateString(day);
         const dayRestingHR = getRestingHRForDate(dateStr);
         dailyMap[dateStr] = {
           date: dateStr,
@@ -119,7 +119,7 @@ const DashboardScreen: React.FC = () => {
         if (workout.heartRateSamples.length === 0) {
           return;
         }
-        const dateStr = workout.startDate.toISOString().split('T')[0];
+        const dateStr = getLocalDateString(workout.startDate);
         if (dailyMap[dateStr]) {
           // Use the resting HR for this specific day
           const dayRestingHR = dailyMap[dateStr].restingHR || settings.restingHeartRate;
@@ -159,8 +159,8 @@ const DashboardScreen: React.FC = () => {
       );
 
       const weekly: WeeklyZoneData = {
-        weekStart: weekStart.toISOString().split('T')[0],
-        weekEnd: weekEnd.toISOString().split('T')[0],
+        weekStart: getLocalDateString(weekStart),
+        weekEnd: getLocalDateString(weekEnd),
         dailyData,
         weeklyTotals,
         totalMinutes: weeklyTotals.reduce((sum, e) => sum + e.minutes, 0),
@@ -386,7 +386,7 @@ const DashboardScreen: React.FC = () => {
             {weeklyData.dailyData.map(day => (
               <View key={day.date} style={styles.dayLabelColumn}>
                 <Text style={styles.dailyRestingHR}>
-                  {day.date <= new Date().toISOString().split('T')[0] && day.restingHR
+                  {day.date <= getLocalDateString() && day.restingHR
                     ? `${day.restingHR}`
                     : ' '}
                 </Text>

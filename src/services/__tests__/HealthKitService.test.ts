@@ -286,17 +286,17 @@ describe('getWakingHeartRate', () => {
     expect(hr).toBe(53);
   });
 
-  it('uses the latest sleep session when multiple exist', async () => {
-    // Two sleep sessions — nap and main sleep
+  it('uses the latest overnight sleep session when multiple exist', async () => {
+    // Two overnight sleep segments (e.g. woke briefly at 3 AM, fell back asleep)
     mockQueryCategorySamples.mockResolvedValue([
       {
-        startDate: '2026-04-08T01:00:00',
-        endDate: '2026-04-08T03:00:00', // Nap ends at 3 AM
+        startDate: '2026-04-07T22:00:00', // Started previous evening
+        endDate: '2026-04-08T03:00:00',   // Woke briefly at 3 AM
         value: 1,
       },
       {
-        startDate: '2026-04-08T03:30:00',
-        endDate: '2026-04-08T07:00:00', // Main sleep ends at 7 AM
+        startDate: '2026-04-07T23:30:00', // Second segment also started before midnight
+        endDate: '2026-04-08T07:00:00',   // Final wake at 7 AM
         value: 1,
       },
     ]);
@@ -307,8 +307,59 @@ describe('getWakingHeartRate', () => {
     ]);
 
     const hr = await getWakingHeartRate(new Date('2026-04-08'));
-    // Should pick lowest near 7 AM (latest session), not 3 AM
+    // Should pick lowest near 7 AM (latest overnight session), not 3 AM
     expect(hr).toBe(46);
+  });
+
+  it('ignores daytime naps — only uses overnight sleep', async () => {
+    // Overnight sleep ending at 6:30 AM + afternoon nap ending at 3 PM
+    mockQueryCategorySamples.mockResolvedValue([
+      {
+        startDate: '2026-04-07T23:00:00', // Overnight: started previous evening
+        endDate: '2026-04-08T06:30:00',   // Woke at 6:30 AM
+        value: 1,
+      },
+      {
+        startDate: '2026-04-08T13:00:00', // Nap: started 1 PM same day
+        endDate: '2026-04-08T14:30:00',   // Ended 2:30 PM — but this is after noon, so won't match endDate filter anyway
+        value: 1,
+      },
+    ]);
+
+    mockQueryQuantitySamples.mockResolvedValue([
+      {startDate: '2026-04-08T06:28:00', quantity: 48},
+      {startDate: '2026-04-08T06:32:00', quantity: 52},
+    ]);
+
+    const hr = await getWakingHeartRate(new Date('2026-04-08'));
+    // Should use overnight wake time (6:30 AM), ignore the nap
+    expect(hr).toBe(48);
+  });
+
+  it('ignores naps that started and ended in the morning', async () => {
+    // Edge case: nap started at 10 AM and ended at 11 AM (both before noon,
+    // but started AFTER midnight so it's not overnight sleep)
+    mockQueryCategorySamples.mockResolvedValue([
+      {
+        startDate: '2026-04-07T22:30:00', // Overnight sleep
+        endDate: '2026-04-08T05:45:00',   // Woke at 5:45 AM
+        value: 1,
+      },
+      {
+        startDate: '2026-04-08T10:00:00', // Morning nap (started after midnight)
+        endDate: '2026-04-08T11:00:00',   // Ended before noon
+        value: 1,
+      },
+    ]);
+
+    mockQueryQuantitySamples.mockResolvedValue([
+      {startDate: '2026-04-08T05:43:00', quantity: 45},
+      {startDate: '2026-04-08T05:50:00', quantity: 50},
+    ]);
+
+    const hr = await getWakingHeartRate(new Date('2026-04-08'));
+    // Should use 5:45 AM wake time from overnight sleep, not 11 AM nap wake
+    expect(hr).toBe(45);
   });
 });
 

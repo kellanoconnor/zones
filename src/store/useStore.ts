@@ -5,6 +5,7 @@ import {
   DEFAULT_ZONES,
   DEFAULT_MAX_HR,
   DEFAULT_RESTING_HR,
+  getLocalDateString,
 } from '../utils/constants';
 
 const SETTINGS_KEY = '@zones_settings';
@@ -105,7 +106,7 @@ const useStore = create<AppState>((set, get) => ({
         return state;
       }
       const filtered = state.restingHRHistory.filter(d => d.date !== date);
-      const today = new Date().toISOString().split('T')[0];
+      const today = getLocalDateString();
       return {
         restingHRHistory: [
           ...filtered,
@@ -120,7 +121,14 @@ const useStore = create<AppState>((set, get) => ({
     if (record) {
       return record.restingHR;
     }
-    // Fall back to current setting
+    // Fall back to the most recent stored value before this date
+    const prior = state.restingHRHistory
+      .filter(d => d.date < date)
+      .sort((a, b) => b.date.localeCompare(a.date));
+    if (prior.length > 0) {
+      return prior[0].restingHR;
+    }
+    // Last resort: global setting default
     return state.settings.restingHeartRate;
   },
 

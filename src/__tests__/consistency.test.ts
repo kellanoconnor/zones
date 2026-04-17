@@ -9,6 +9,7 @@ import {
   LABEL_TOTAL_ALL, LABEL_TOTAL_ALL_SHORT,
   LABEL_TOTAL_Z3_PLUS, LABEL_TOTAL_Z3_PLUS_SHORT,
   LABEL_COMBINED, LABEL_COMBINED_SHORT,
+  getLocalDateString,
 } from '../utils/constants';
 import {
   calculateZoneBoundaries,
@@ -47,6 +48,43 @@ describe('Label consistency across screens', () => {
     expect(LABEL_TOTAL_ALL_SHORT).toBeTruthy();
     expect(LABEL_TOTAL_Z3_PLUS_SHORT).toBeTruthy();
     expect(LABEL_COMBINED_SHORT).toBeTruthy();
+  });
+});
+
+// ─── Date String Consistency (UTC bug prevention) ───
+
+describe('getLocalDateString uses local time, not UTC', () => {
+  it('returns YYYY-MM-DD format', () => {
+    const result = getLocalDateString(new Date(2026, 3, 15)); // Apr 15 local
+    expect(result).toBe('2026-04-15');
+  });
+
+  it('matches local date even late at night (the UTC bug scenario)', () => {
+    // 11:30 PM EDT on Apr 15 = Apr 16 01:30 UTC
+    // toISOString() would wrongly return "2026-04-16"
+    // getLocalDateString() must return "2026-04-15"
+    const lateNight = new Date(2026, 3, 15, 23, 30, 0); // Apr 15, 11:30 PM local
+    const result = getLocalDateString(lateNight);
+    expect(result).toBe('2026-04-15');
+
+    // Verify toISOString WOULD be wrong (in timezones behind UTC)
+    const utcDate = lateNight.toISOString().split('T')[0];
+    // In UTC-4 (EDT), this would be "2026-04-16"
+    // In UTC+0, this would still be "2026-04-15"
+    // Either way, getLocalDateString is always correct
+    expect(result).toBe('2026-04-15');
+  });
+
+  it('pads single-digit months and days', () => {
+    const jan1 = new Date(2026, 0, 5); // Jan 5
+    expect(getLocalDateString(jan1)).toBe('2026-01-05');
+  });
+
+  it('defaults to current date when no arg', () => {
+    const result = getLocalDateString();
+    const now = new Date();
+    const expected = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    expect(result).toBe(expected);
   });
 });
 

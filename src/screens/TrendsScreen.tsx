@@ -18,7 +18,7 @@ import {
 } from '../services/ZoneEngine';
 import {getWorkoutsWithHeartRate} from '../services/HealthKitService';
 import {WeeklyZoneData, ZoneTimeEntry} from '../types';
-import {LABEL_TOTAL_ALL_SHORT, LABEL_COMBINED_SHORT} from '../utils/constants';
+import {LABEL_TOTAL_ALL_SHORT, LABEL_COMBINED_SHORT, getLocalDateString} from '../utils/constants';
 
 const WEEKS_TO_SHOW = 12;
 
@@ -56,7 +56,7 @@ const TrendsScreen: React.FC = () => {
         workouts.forEach(workout => {
           if (workout.heartRateSamples.length > 0) {
             // Use per-day resting HR for zone boundaries (matches Dashboard)
-            const dateStr = workout.startDate.toISOString().split('T')[0];
+            const dateStr = getLocalDateString(workout.startDate);
             const dayRestingHR = getRestingHRForDate(dateStr);
             const daySettings = {
               ...settings,

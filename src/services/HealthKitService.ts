@@ -170,20 +170,22 @@ export async function getWakingHeartRate(
     let wakeTime: Date | null = null;
 
     if (sleepSamples && sleepSamples.length > 0) {
-      // CategoryValueSleepAnalysis.awake = 2
-      // Find the last "awake" sample or the end of the last sleep session
-      // Sort by endDate descending to find when sleep ended
+      // Filter to overnight sleep sessions only (excludes naps):
+      // - Must end between midnight and noon on the target day (morning wake-up)
+      // - Must start before midnight (i.e. started the previous evening/night)
+      // This prevents afternoon naps from being mistaken for overnight sleep
       const sortedSleep = [...sleepSamples]
         .filter((s: any) => {
+          const start = new Date(s.startDate);
           const end = new Date(s.endDate);
-          return end >= dayStart && end <= dayEnd;
+          return end >= dayStart && end <= dayEnd && start < dayStart;
         })
         .sort((a: any, b: any) =>
           new Date(b.endDate).getTime() - new Date(a.endDate).getTime(),
         );
 
       if (sortedSleep.length > 0) {
-        // The end of the last sleep session is the wake time
+        // The end of the last overnight sleep session is the wake time
         wakeTime = new Date((sortedSleep[0] as any).endDate);
       }
     }
