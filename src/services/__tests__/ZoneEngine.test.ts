@@ -280,7 +280,9 @@ describe('ZoneEngine', () => {
     it('is 6 days after week start', () => {
       const sunday = getWeekStart(0);
       const saturday = getWeekEnd(sunday);
-      expect(saturday.getDate() - sunday.getDate()).toBe(6);
+      // Use millisecond diff so the assertion holds across month boundaries
+      const dayMs = 24 * 60 * 60 * 1000;
+      expect(Math.floor((saturday.getTime() - sunday.getTime()) / dayMs)).toBe(6);
     });
 
     it('ends at 23:59:59', () => {
