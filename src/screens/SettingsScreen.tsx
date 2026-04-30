@@ -1,4 +1,4 @@
-import React, {useCallback, useState, useEffect} from 'react';
+import React, {useCallback, useState} from 'react';
 import {
   View,
   Text,
@@ -9,422 +9,403 @@ import {
   Alert,
 } from 'react-native';
 import useStore from '../store/useStore';
-import {calculateTHR, calculateHRR} from '../services/ZoneEngine';
+import {calculateTHR, calculateHRR, calculateZoneBoundaries} from '../services/ZoneEngine';
+import {T, zoneColor} from '../utils/theme';
+
+const ZONE_NAMES = ['Recovery', 'Aerobic Base', 'Tempo', 'Threshold', 'VO₂ Max'];
 
 const SettingsScreen: React.FC = () => {
-  const {settings, setMaxHeartRate, setRestingHeartRate, updateZone, saveSettings, resetToDefaults, todayRestingHR} =
-    useStore();
+  const {
+    settings,
+    setMaxHeartRate,
+    setRestingHeartRate,
+    updateZone,
+    saveSettings,
+    resetToDefaults,
+  } = useStore();
 
-  const [maxHRInput, setMaxHRInput] = useState(String(settings.maxHeartRate));
-  const [restingHRInput, setRestingHRInput] = useState(String(settings.restingHeartRate));
-  const [maxHRWarning, setMaxHRWarning] = useState<string | null>(null);
-  const [restingHRWarning, setRestingHRWarning] = useState<string | null>(null);
-
-  // Sync resting HR input when auto-updated from HealthKit
-  useEffect(() => {
-    setRestingHRInput(String(settings.restingHeartRate));
-  }, [settings.restingHeartRate]);
+  const [editingHR, setEditingHR] = useState(false);
 
   const hrr = calculateHRR(settings.maxHeartRate, settings.restingHeartRate);
+  const boundaries = calculateZoneBoundaries(settings);
 
   const handleSave = useCallback(async () => {
-    if (maxHRWarning || restingHRWarning) {
-      Alert.alert('Invalid Settings', 'Please fix the warnings before saving.');
-      return;
-    }
     await saveSettings();
-    Alert.alert('Saved', 'Your settings have been saved.');
-  }, [saveSettings, maxHRWarning, restingHRWarning]);
+    setEditingHR(false);
+    Alert.alert('Saved', 'Settings saved.');
+  }, [saveSettings]);
 
   const handleReset = useCallback(() => {
     Alert.alert(
       'Reset to Defaults',
-      'This will reset all heart rate and zone settings to their default values. Are you sure?',
+      'Reset all heart rate and zone settings?',
       [
         {text: 'Cancel', style: 'cancel'},
-        {
-          text: 'Reset',
-          style: 'destructive',
-          onPress: () => {
-            resetToDefaults();
-            setMaxHRInput('190');
-            setRestingHRInput('60');
-            setMaxHRWarning(null);
-            setRestingHRWarning(null);
-          },
-        },
+        {text: 'Reset', style: 'destructive', onPress: resetToDefaults},
       ],
     );
   }, [resetToDefaults]);
 
-  const validateMaxHR = (value: string) => {
-    const num = parseInt(value, 10);
-    if (isNaN(num)) {
-      setMaxHRWarning('Please enter a valid number');
-      return;
-    }
-    if (num < 60 || num > 220) {
-      setMaxHRWarning('Max HR must be between 60 and 220 bpm');
-      return;
-    }
-    if (num <= settings.restingHeartRate) {
-      setMaxHRWarning('Max HR must be greater than Resting HR');
-      return;
-    }
-    setMaxHRWarning(null);
-    setMaxHeartRate(num);
-    // Re-validate resting HR since max changed
-    const restNum = parseInt(restingHRInput, 10);
-    if (!isNaN(restNum) && restNum >= num) {
-      setRestingHRWarning('Resting HR must be less than Max HR');
-    } else if (!isNaN(restNum) && restNum >= 40 && restNum <= 90) {
-      setRestingHRWarning(null);
-    }
-  };
-
-  const validateRestingHR = (value: string) => {
-    const num = parseInt(value, 10);
-    if (isNaN(num)) {
-      setRestingHRWarning('Please enter a valid number');
-      return;
-    }
-    if (num < 40 || num > 90) {
-      setRestingHRWarning('Resting HR must be between 40 and 90 bpm');
-      return;
-    }
-    if (num >= settings.maxHeartRate) {
-      setRestingHRWarning('Resting HR must be less than Max HR');
-      return;
-    }
-    setRestingHRWarning(null);
-    setRestingHeartRate(num);
+  const parseNum = (v: string, min: number, max: number) => {
+    const n = parseInt(v, 10);
+    return !isNaN(n) && n >= min && n <= max ? n : null;
   };
 
   return (
-    <ScrollView style={styles.container}>
+    <ScrollView
+      style={styles.container}
+      showsVerticalScrollIndicator={false}
+      contentContainerStyle={styles.scrollContent}>
       <Text style={styles.title}>Settings</Text>
 
-      {/* Heart Rate Inputs */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Heart Rate</Text>
+      {/* ── HR stat tiles ── */}
+      <View style={styles.hrTiles}>
+        <TouchableOpacity
+          style={styles.hrTile}
+          onPress={() => setEditingHR(!editingHR)}>
+          <Text style={styles.tileLabel}>Max</Text>
+          {editingHR ? (
+            <TextInput
+              style={styles.tileInput}
+              keyboardType="number-pad"
+              value={String(settings.maxHeartRate)}
+              onChangeText={v => {
+                const n = parseNum(v, 100, 250);
+                if (n !== null) setMaxHeartRate(n);
+              }}
+              autoFocus
+              selectTextOnFocus
+            />
+          ) : (
+            <Text style={styles.tileBig}>{settings.maxHeartRate}</Text>
+          )}
+          <Text style={styles.tileHint}>{editingHR ? 'done' : 'tap to edit'}</Text>
+        </TouchableOpacity>
 
-        <View style={styles.inputRow}>
-          <Text style={styles.inputLabel}>Max Heart Rate (bpm)</Text>
-          <TextInput
-            style={[styles.input, maxHRWarning ? styles.inputError : null]}
-            keyboardType="number-pad"
-            value={maxHRInput}
-            onChangeText={setMaxHRInput}
-            onBlur={() => validateMaxHR(maxHRInput)}
-            placeholder="190"
-            placeholderTextColor="#475569"
-          />
+        <View style={styles.hrTile}>
+          <Text style={styles.tileLabel}>Resting</Text>
+          {editingHR ? (
+            <TextInput
+              style={styles.tileInput}
+              keyboardType="number-pad"
+              value={String(settings.restingHeartRate)}
+              onChangeText={v => {
+                const n = parseNum(v, 30, 120);
+                if (n !== null) setRestingHeartRate(n);
+              }}
+              selectTextOnFocus
+            />
+          ) : (
+            <Text style={styles.tileBig}>{settings.restingHeartRate}</Text>
+          )}
+          <Text style={styles.tileHint}>auto</Text>
         </View>
-        {maxHRWarning && (
-          <Text style={styles.warningText}>{maxHRWarning}</Text>
-        )}
 
-        <View style={styles.inputRow}>
-          <View style={styles.inputLabelGroup}>
-            <Text style={styles.inputLabel}>Resting Heart Rate (bpm)</Text>
-            {todayRestingHR !== null && (
-              <Text style={styles.autoUpdateNote}>
-                Auto-updated from waking HR
-              </Text>
-            )}
-          </View>
-          <TextInput
-            style={[styles.input, restingHRWarning ? styles.inputError : null]}
-            keyboardType="number-pad"
-            value={restingHRInput}
-            onChangeText={setRestingHRInput}
-            onBlur={() => validateRestingHR(restingHRInput)}
-            placeholder="60"
-            placeholderTextColor="#475569"
-          />
-        </View>
-        {restingHRWarning && (
-          <Text style={styles.warningText}>{restingHRWarning}</Text>
-        )}
-
-        <View style={styles.hrrDisplay}>
-          <Text style={styles.hrrLabel}>Heart Rate Reserve (HRR)</Text>
-          <Text style={styles.hrrValue}>{hrr} bpm</Text>
+        <View style={styles.hrTile}>
+          <Text style={styles.tileLabel}>Reserve</Text>
+          <Text style={[styles.tileBig, {color: T.accent}]}>{hrr}</Text>
+          <Text style={styles.tileHint}>bpm</Text>
         </View>
       </View>
 
-      {/* Zone Configuration */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Zone Configuration</Text>
-        <Text style={styles.sectionSubtitle}>
-          Zone boundaries are calculated using the Karvonen Formula based on your Max and Resting heart rates.
-        </Text>
-
-        {settings.zones.map(zone => {
-          const lowerTHR = calculateTHR(
-            settings.restingHeartRate,
-            hrr,
-            zone.lowerIntensity,
-          );
-          const upperTHR = calculateTHR(
-            settings.restingHeartRate,
-            hrr,
-            zone.upperIntensity,
-          );
-
+      {/* ── Zone Ladder ── */}
+      <Text style={styles.sectionLabel}>Zone Ladder</Text>
+      <View style={styles.ladderCard}>
+        {[...settings.zones].reverse().map((zone, i) => {
+          const b = boundaries.find(bd => bd.zoneId === zone.id);
+          const lo = b?.lowerTHR ?? calculateTHR(settings.restingHeartRate, hrr, zone.lowerIntensity);
+          const hi = b?.upperTHR ?? calculateTHR(settings.restingHeartRate, hrr, zone.upperIntensity);
+          const isLast = i === settings.zones.length - 1;
           return (
-            <View key={zone.id} style={styles.zoneCard}>
-              <View style={styles.zoneHeader}>
-                <View
-                  style={[styles.zoneDot, {backgroundColor: zone.color}]}
-                />
-                <Text style={styles.zoneName}>
-                  Zone {zone.id}
+            <View
+              key={zone.id}
+              style={[styles.ladderRow, !isLast && styles.ladderRowBorder]}>
+              <View
+                style={[
+                  styles.zoneSquare,
+                  {backgroundColor: zoneColor(zone.id)},
+                ]}>
+                <Text style={styles.zoneSquareNum}>{zone.id}</Text>
+              </View>
+
+              <View style={{flex: 1}}>
+                <Text style={styles.zoneName}>{ZONE_NAMES[zone.id - 1]}</Text>
+                <Text style={styles.zonePct}>
+                  {zone.lowerIntensity}–{zone.upperIntensity}%
                 </Text>
               </View>
 
-              <View style={styles.zoneInputs}>
-                <View style={styles.zoneInputGroup}>
-                  <Text style={styles.zoneInputLabel}>Lower</Text>
-                  <Text style={styles.zonePercentLocked}>{zone.lowerIntensity}%</Text>
-                  <Text style={styles.thrPreview}>{lowerTHR} bpm</Text>
-                </View>
+              <Text style={styles.zoneBPM}>{lo}–{hi}</Text>
+              <Text style={styles.zoneBPMUnit}>bpm</Text>
+            </View>
+          );
+        })}
+      </View>
 
-                <Text style={styles.zoneDash}>–</Text>
+      <Text style={styles.formulaNote}>
+        Boundaries calculated from Max and Resting heart rate using the Karvonen formula.
+      </Text>
 
-                <View style={styles.zoneInputGroup}>
-                  <Text style={styles.zoneInputLabel}>Upper</Text>
-                  <Text style={styles.zonePercentLocked}>{zone.upperIntensity}%</Text>
-                  <Text style={styles.thrPreview}>{upperTHR} bpm</Text>
-                </View>
+      {/* ── Zone intensity config ── */}
+      <Text style={styles.sectionLabel}>Zone Intensity %</Text>
+      <View style={styles.ladderCard}>
+        {settings.zones.map((zone, i) => {
+          const isLast = i === settings.zones.length - 1;
+          return (
+            <View
+              key={zone.id}
+              style={[styles.intensityRow, !isLast && styles.ladderRowBorder]}>
+              <View style={[styles.dot, {backgroundColor: zoneColor(zone.id)}]} />
+              <Text style={styles.intensityZoneName}>{ZONE_NAMES[zone.id - 1]}</Text>
+              <View style={styles.intensityInputs}>
+                <TextInput
+                  style={styles.pctInput}
+                  keyboardType="number-pad"
+                  value={String(zone.lowerIntensity)}
+                  onChangeText={v => {
+                    const n = parseNum(v, 0, 100);
+                    if (n !== null) updateZone(zone.id, {lowerIntensity: n});
+                  }}
+                  selectTextOnFocus
+                />
+                <Text style={styles.pctDash}>–</Text>
+                <TextInput
+                  style={styles.pctInput}
+                  keyboardType="number-pad"
+                  value={String(zone.upperIntensity)}
+                  onChangeText={v => {
+                    const n = parseNum(v, 0, 100);
+                    if (n !== null) updateZone(zone.id, {upperIntensity: n});
+                  }}
+                  selectTextOnFocus
+                />
+                <Text style={styles.pctUnit}>%</Text>
               </View>
             </View>
           );
         })}
       </View>
 
-      {/* Action Buttons */}
-      <View style={styles.actions}>
-        <TouchableOpacity style={styles.saveButton} onPress={handleSave}>
-          <Text style={styles.saveButtonText}>Save Settings</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity style={styles.resetButton} onPress={handleReset}>
-          <Text style={styles.resetButtonText}>Reset to Defaults</Text>
-        </TouchableOpacity>
+      {/* ── Weekly Goals ── */}
+      <Text style={styles.sectionLabel}>Weekly Goals</Text>
+      <View style={styles.ladderCard}>
+        {settings.zones.map((zone, i) => {
+          const isLast = i === settings.zones.length - 1;
+          return (
+            <View
+              key={zone.id}
+              style={[styles.intensityRow, !isLast && styles.ladderRowBorder]}>
+              <View style={[styles.dot, {backgroundColor: zoneColor(zone.id)}]} />
+              <Text style={styles.intensityZoneName}>{ZONE_NAMES[zone.id - 1]}</Text>
+              <View style={styles.intensityInputs}>
+                <TextInput
+                  style={styles.pctInput}
+                  keyboardType="number-pad"
+                  value={zone.goalMinutes ? String(zone.goalMinutes) : ''}
+                  onChangeText={v => {
+                    const n = parseInt(v, 10);
+                    updateZone(zone.id, {goalMinutes: isNaN(n) ? undefined : n});
+                  }}
+                  placeholder="—"
+                  placeholderTextColor={T.text.tertiary}
+                  selectTextOnFocus
+                />
+                <Text style={styles.pctUnit}>min</Text>
+              </View>
+            </View>
+          );
+        })}
       </View>
 
-      <View style={styles.bottomSpacer} />
+      {/* ── Actions ── */}
+      <View style={styles.actions}>
+        <TouchableOpacity style={styles.saveBtn} onPress={handleSave}>
+          <Text style={styles.saveBtnText}>Save Settings</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.resetBtn} onPress={handleReset}>
+          <Text style={styles.resetBtnText}>Reset to Defaults</Text>
+        </TouchableOpacity>
+      </View>
     </ScrollView>
   );
 };
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#0F172A',
-  },
+  container: {flex: 1, backgroundColor: T.bg.page},
+  scrollContent: {paddingBottom: 48},
   title: {
-    fontSize: 28,
-    fontWeight: '700',
-    color: '#F1F5F9',
+    fontSize: 32,
+    fontWeight: '600',
+    color: T.text.primary,
     paddingHorizontal: 20,
     paddingTop: 16,
+    letterSpacing: -1,
     marginBottom: 20,
   },
-  section: {
-    paddingHorizontal: 20,
-    marginBottom: 28,
-  },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#F1F5F9',
-    marginBottom: 4,
-  },
-  sectionSubtitle: {
-    fontSize: 13,
-    color: '#64748B',
-    marginBottom: 16,
-  },
-  inputRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: '#1E293B',
-  },
-  inputLabelGroup: {
-    flex: 1,
-    marginRight: 12,
-  },
-  inputLabel: {
-    fontSize: 15,
-    color: '#CBD5E1',
-  },
-  autoUpdateNote: {
+  sectionLabel: {
     fontSize: 11,
-    color: '#3B82F6',
-    marginTop: 2,
-  },
-  input: {
-    backgroundColor: '#1E293B',
-    color: '#F1F5F9',
-    fontSize: 16,
+    color: T.text.tertiary,
     fontWeight: '600',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 8,
-    minWidth: 80,
-    textAlign: 'center',
-    borderWidth: 1,
-    borderColor: '#334155',
+    letterSpacing: 1.5,
+    textTransform: 'uppercase',
+    paddingHorizontal: 20,
+    marginBottom: 8,
+    marginTop: 22,
   },
-  inputError: {
-    borderColor: '#EF4444',
-  },
-  warningText: {
-    color: '#EF4444',
-    fontSize: 12,
-    marginTop: 4,
-    paddingLeft: 4,
-  },
-  hrrDisplay: {
+
+  hrTiles: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 14,
-    marginTop: 4,
+    gap: 8,
+    paddingHorizontal: 20,
   },
-  hrrLabel: {
-    fontSize: 15,
-    color: '#94A3B8',
-  },
-  hrrValue: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#3B82F6',
-  },
-  zoneCard: {
-    backgroundColor: '#1E293B',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 12,
-  },
-  zoneHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 14,
-  },
-  zoneDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    marginRight: 10,
-  },
-  zoneName: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#F1F5F9',
-  },
-  zoneInputs: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  zoneInputGroup: {
-    alignItems: 'center',
+  hrTile: {
     flex: 1,
+    backgroundColor: T.bg.card,
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: T.bg.line,
+    alignItems: 'center',
   },
-  zoneInputLabel: {
-    fontSize: 12,
-    color: '#64748B',
-    marginBottom: 6,
-  },
-  zonePercentLocked: {
-    color: '#94A3B8',
-    fontSize: 18,
+  tileLabel: {
+    fontSize: 10,
+    color: T.text.tertiary,
     fontWeight: '600',
-    paddingVertical: 10,
+    letterSpacing: 1,
+    textTransform: 'uppercase',
   },
-  thrPreview: {
-    fontSize: 12,
-    color: '#3B82F6',
-    marginTop: 6,
+  tileBig: {
+    fontSize: 26,
     fontWeight: '500',
+    color: T.text.primary,
+    marginTop: 4,
+    letterSpacing: -0.5,
   },
-  zoneDash: {
-    color: '#64748B',
-    fontSize: 20,
-    marginHorizontal: 12,
-    marginTop: 16,
+  tileInput: {
+    fontSize: 26,
+    fontWeight: '500',
+    color: T.text.primary,
+    marginTop: 4,
+    letterSpacing: -0.5,
+    minWidth: 60,
+    textAlign: 'center',
+    padding: 0,
   },
-  goalRow: {
+  tileHint: {fontSize: 9, color: T.text.tertiary, marginTop: 2},
+
+  ladderCard: {
+    backgroundColor: T.bg.card,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: T.bg.line,
+    marginHorizontal: 20,
+    padding: 16,
+  },
+  ladderRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
     paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#1E293B',
-  },
-  goalLabel: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  goalName: {
-    fontSize: 15,
-    color: '#CBD5E1',
-  },
-  goalInputWrapper: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  goalInput: {
-    backgroundColor: '#1E293B',
-    color: '#F1F5F9',
-    fontSize: 16,
-    fontWeight: '600',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 8,
-    minWidth: 70,
-    textAlign: 'center',
-  },
-  goalUnit: {
-    color: '#64748B',
-    fontSize: 13,
-    marginLeft: 8,
-  },
-  actions: {
-    paddingHorizontal: 20,
     gap: 12,
   },
-  saveButton: {
-    backgroundColor: '#3B82F6',
-    paddingVertical: 16,
-    borderRadius: 12,
+  ladderRowBorder: {
+    borderBottomWidth: 1,
+    borderBottomColor: T.bg.line,
+  },
+  zoneSquare: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
     alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
   },
-  saveButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '600',
+  zoneSquareNum: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#0A0D12',
   },
-  resetButton: {
-    backgroundColor: '#1E293B',
-    paddingVertical: 16,
-    borderRadius: 12,
-    alignItems: 'center',
-  },
-  resetButtonText: {
-    color: '#EF4444',
-    fontSize: 16,
+  zoneName: {
+    fontSize: 13,
+    color: T.text.primary,
     fontWeight: '500',
   },
-  bottomSpacer: {
-    height: 40,
+  zonePct: {
+    fontSize: 11,
+    color: T.text.tertiary,
+    marginTop: 1,
   },
+  zoneBPM: {
+    fontSize: 14,
+    color: T.accent,
+    fontWeight: '500',
+  },
+  zoneBPMUnit: {
+    fontSize: 10,
+    color: T.text.tertiary,
+  },
+
+  formulaNote: {
+    fontSize: 11,
+    color: T.text.tertiary,
+    paddingHorizontal: 20,
+    marginTop: 10,
+    lineHeight: 16,
+  },
+
+  intensityRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    gap: 10,
+  },
+  dot: {width: 10, height: 10, borderRadius: 5, flexShrink: 0},
+  intensityZoneName: {
+    flex: 1,
+    fontSize: 13,
+    color: T.text.primary,
+  },
+  intensityInputs: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  pctInput: {
+    backgroundColor: T.bg.cardHi,
+    color: T.text.primary,
+    fontSize: 14,
+    fontWeight: '600',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 6,
+    minWidth: 48,
+    textAlign: 'center',
+    borderWidth: 1,
+    borderColor: T.bg.line,
+  },
+  pctDash: {color: T.text.tertiary, fontSize: 14},
+  pctUnit: {color: T.text.tertiary, fontSize: 12, marginLeft: 2},
+
+  actions: {
+    paddingHorizontal: 20,
+    marginTop: 24,
+    gap: 10,
+  },
+  saveBtn: {
+    backgroundColor: T.accent,
+    paddingVertical: 16,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  saveBtnText: {color: '#0A0D12', fontSize: 16, fontWeight: '700'},
+  resetBtn: {
+    backgroundColor: T.bg.card,
+    paddingVertical: 16,
+    borderRadius: 12,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: T.bg.line,
+  },
+  resetBtnText: {color: '#D96E7A', fontSize: 16, fontWeight: '500'},
 });
 
 export default SettingsScreen;

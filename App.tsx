@@ -38,14 +38,14 @@ function App() {
             screenOptions={{
               headerShown: false,
               tabBarStyle: {
-                backgroundColor: '#0F172A',
-                borderTopColor: '#1E293B',
+                backgroundColor: '#0A0D12',
+                borderTopColor: 'rgba(255,255,255,0.06)',
                 borderTopWidth: 1,
                 paddingBottom: 4,
                 height: 84,
               },
-              tabBarActiveTintColor: '#3B82F6',
-              tabBarInactiveTintColor: '#64748B',
+              tabBarActiveTintColor: '#7AA9E0',
+              tabBarInactiveTintColor: 'rgba(242,243,245,0.38)',
               tabBarLabelStyle: {
                 fontSize: 12,
                 fontWeight: '500',

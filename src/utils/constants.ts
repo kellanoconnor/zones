@@ -5,35 +5,35 @@ export const DEFAULT_ZONES: Zone[] = [
   {
     id: 1,
     name: 'Recovery',
-    color: '#3B82F6', // Blue
+    color: '#6B9DD9', // muted blue
     lowerIntensity: 50,
     upperIntensity: 60,
   },
   {
     id: 2,
     name: 'Aerobic Base',
-    color: '#22C55E', // Green
+    color: '#6BC28E', // sage green
     lowerIntensity: 60,
     upperIntensity: 70,
   },
   {
     id: 3,
     name: 'Tempo',
-    color: '#EAB308', // Yellow
+    color: '#D9B45E', // warm gold
     lowerIntensity: 70,
     upperIntensity: 80,
   },
   {
     id: 4,
     name: 'Threshold',
-    color: '#F97316', // Orange
+    color: '#D98B5E', // terracotta
     lowerIntensity: 80,
     upperIntensity: 90,
   },
   {
     id: 5,
     name: 'VO2 Max',
-    color: '#EF4444', // Red
+    color: '#D96E7A', // dusty rose
     lowerIntensity: 90,
     upperIntensity: 100,
   },

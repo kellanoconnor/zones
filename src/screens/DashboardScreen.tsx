@@ -1,4 +1,4 @@
-import React, {useEffect, useCallback, useRef} from 'react';
+import React, {useEffect, useCallback} from 'react';
 import {
   View,
   Text,
@@ -6,8 +6,9 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   ScrollView,
-  AppState,
+  Dimensions,
 } from 'react-native';
+import Svg, {Path, Line, Rect, Defs, LinearGradient, Stop} from 'react-native-svg';
 import useStore from '../store/useStore';
 import {
   getWeekStart,
@@ -17,10 +18,112 @@ import {
   calculateZoneTime,
   aggregateZoneTime,
 } from '../services/ZoneEngine';
-import {getWorkoutsWithHeartRate, getWakingHeartRate} from '../services/HealthKitService';
+import {getWorkoutsWithHeartRate} from '../services/HealthKitService';
 import {DailyZoneData, WeeklyZoneData, ZoneTimeEntry} from '../types';
-import {DAYS_OF_WEEK, LABEL_TOTAL_ALL_SHORT, LABEL_TOTAL_Z3_PLUS_SHORT, LABEL_COMBINED_SHORT, getLocalDateString} from '../utils/constants';
+import {DAYS_OF_WEEK} from '../utils/constants';
+import {T, zoneColor} from '../utils/theme';
 
+const SCREEN_W = Dimensions.get('window').width;
+
+// ─── HR chart (Daily V3) ─────────────────────────────────────────────────────
+function HRChart({
+  samples,
+  zoneBoundaries,
+}: {
+  samples: {bpm: number}[];
+  zoneBoundaries: {zoneId: number; lowerTHR: number; upperTHR: number}[];
+}) {
+  const W = 300;
+  const H = 140;
+  const minBPM = 40;
+  const maxBPM = 200;
+  const yFor = (v: number) => H - ((v - minBPM) / (maxBPM - minBPM)) * H;
+
+  let pathD = '';
+  let fillD = '';
+  if (samples.length > 1) {
+    const xFor = (i: number) => (i / (samples.length - 1)) * W;
+    pathD = `M ${xFor(0)} ${yFor(samples[0].bpm)}`;
+    for (let i = 1; i < samples.length; i++) {
+      const x0 = xFor(i - 1);
+      const y0 = yFor(samples[i - 1].bpm);
+      const x1 = xFor(i);
+      const y1 = yFor(samples[i].bpm);
+      const cx = (x0 + x1) / 2;
+      pathD += ` C ${cx} ${y0}, ${cx} ${y1}, ${x1} ${y1}`;
+    }
+    fillD = pathD + ` L ${W} ${H} L 0 ${H} Z`;
+  }
+
+  const yLabels = [180, 150, 120, 90, 60];
+
+  return (
+    <View style={{flexDirection: 'row'}}>
+      {/* Y-axis */}
+      <View style={{width: 26, height: H, position: 'relative'}}>
+        {yLabels.map(bpm => (
+          <Text
+            key={bpm}
+            style={[styles.yLabel, {top: yFor(bpm) - 7}]}>
+            {bpm}
+          </Text>
+        ))}
+      </View>
+
+      {/* SVG chart area */}
+      <View style={{flex: 1}}>
+        <Svg
+          width="100%"
+          height={H}
+          viewBox={`0 0 ${W} ${H}`}
+          preserveAspectRatio="none">
+          <Defs>
+            <LinearGradient id="hrFill" x1="0" x2="0" y1="0" y2="1">
+              <Stop offset="0%" stopColor={T.accent} stopOpacity="0.28" />
+              <Stop offset="100%" stopColor={T.accent} stopOpacity="0" />
+            </LinearGradient>
+          </Defs>
+          {zoneBoundaries.map(b => (
+            <Rect
+              key={b.zoneId}
+              x={0}
+              y={yFor(b.upperTHR)}
+              width={W}
+              height={Math.max(0, yFor(b.lowerTHR) - yFor(b.upperTHR))}
+              fill={zoneColor(b.zoneId)}
+              opacity={0.07}
+            />
+          ))}
+          {yLabels.map(bpm => (
+            <Line
+              key={bpm}
+              x1={0} x2={W}
+              y1={yFor(bpm)} y2={yFor(bpm)}
+              stroke={T.bg.line}
+              strokeWidth="1"
+            />
+          ))}
+          {fillD ? <Path d={fillD} fill="url(#hrFill)" /> : null}
+          {pathD ? (
+            <Path
+              d={pathD}
+              fill="none"
+              stroke={T.accent}
+              strokeWidth="1.5"
+              strokeLinejoin="round"
+              vectorEffect="non-scaling-stroke"
+            />
+          ) : null}
+        </Svg>
+      </View>
+
+      {/* BPM label rotated */}
+      <Text style={styles.bpmAxisLabel}>BPM</Text>
+    </View>
+  );
+}
+
+// ─── Main component ──────────────────────────────────────────────────────────
 const DashboardScreen: React.FC = () => {
   const {
     settings,
@@ -29,721 +132,565 @@ const DashboardScreen: React.FC = () => {
     weeklyData,
     isLoading,
     isHealthKitAuthorized,
-    todayRestingHR,
     setCurrentWeekOffset,
     setViewMode,
     setWeeklyData,
     setIsLoading,
-    setTodayRestingHR,
-    setDailyRestingHR,
-    getRestingHRForDate,
-    saveRestingHRHistory,
-    loadRestingHRHistory,
   } = useStore();
 
   const weekStart = getWeekStart(currentWeekOffset);
   const weekEnd = getWeekEnd(weekStart);
   const weekLabel = formatWeekRange(weekStart, weekEnd);
 
-  // Fetch today's waking heart rate on mount, backfill past week on first launch
-  const fetchWakingHR = useCallback(async () => {
-    if (!isHealthKitAuthorized) {
-      return;
-    }
-    try {
-      await loadRestingHRHistory();
-      const today = new Date();
-      const todayStr = getLocalDateString(today);
-
-      // Backfill past 6 days — fetch waking HR for any day not yet locked in history
-      const {restingHRHistory} = useStore.getState();
-      const lockedDates = new Set(
-        restingHRHistory.filter(d => d.locked).map(d => d.date),
-      );
-      for (let i = 6; i >= 1; i--) {
-        const pastDate = new Date(today);
-        pastDate.setDate(today.getDate() - i);
-        const pastDateStr = getLocalDateString(pastDate);
-        if (!lockedDates.has(pastDateStr)) {
-          const pastWakingHR = await getWakingHeartRate(pastDate);
-          if (pastWakingHR !== null) {
-            setDailyRestingHR(pastDateStr, pastWakingHR);
-          }
-        }
-      }
-
-      const wakingHR = await getWakingHeartRate(today);
-      if (wakingHR !== null) {
-        setTodayRestingHR(wakingHR);
-        setDailyRestingHR(todayStr, wakingHR);
-      }
-      await saveRestingHRHistory();
-    } catch (error) {
-      console.error('Failed to fetch waking HR:', error);
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isHealthKitAuthorized]);
-
-  useEffect(() => {
-    fetchWakingHR();
-  }, [fetchWakingHR]);
-
   const loadWeekData = useCallback(async () => {
-    if (!isHealthKitAuthorized) {
-      return;
-    }
-
+    if (!isHealthKitAuthorized) return;
     setIsLoading(true);
     try {
+      const boundaries = calculateZoneBoundaries(settings);
       const workouts = await getWorkoutsWithHeartRate(weekStart, weekEnd);
-
-      // Group heart rate samples by day
       const dailyMap: Record<string, DailyZoneData> = {};
-
-      // Initialize all 7 days
       for (let i = 0; i < 7; i++) {
         const day = new Date(weekStart);
         day.setDate(weekStart.getDate() + i);
-        const dateStr = getLocalDateString(day);
-        const dayRestingHR = getRestingHRForDate(dateStr);
+        const dateStr = day.toISOString().split('T')[0];
         dailyMap[dateStr] = {
           date: dateStr,
           zoneTime: settings.zones.map(z => ({zoneId: z.id, minutes: 0})),
           totalMinutes: 0,
-          restingHR: dayRestingHR,
         };
       }
-
-      // Process each workout using that day's resting HR for zone boundaries
       workouts.forEach(workout => {
-        if (workout.heartRateSamples.length === 0) {
-          return;
-        }
-        const dateStr = getLocalDateString(workout.startDate);
+        if (workout.heartRateSamples.length === 0) return;
+        const dateStr = workout.startDate.toISOString().split('T')[0];
         if (dailyMap[dateStr]) {
-          // Use the resting HR for this specific day
-          const dayRestingHR = dailyMap[dateStr].restingHR || settings.restingHeartRate;
-          const daySettings = {
-            ...settings,
-            restingHeartRate: dayRestingHR,
-          };
-          const boundaries = calculateZoneBoundaries(daySettings);
           const zoneTime = calculateZoneTime(
             workout.heartRateSamples,
             boundaries,
             settings.zones,
           );
-          // Add to existing daily data
           zoneTime.forEach(entry => {
-            const existing = dailyMap[dateStr].zoneTime.find(
-              e => e.zoneId === entry.zoneId,
-            );
-            if (existing) {
-              existing.minutes += entry.minutes;
-            }
+            const ex = dailyMap[dateStr].zoneTime.find(e => e.zoneId === entry.zoneId);
+            if (ex) ex.minutes += entry.minutes;
           });
           dailyMap[dateStr].totalMinutes = dailyMap[dateStr].zoneTime.reduce(
-            (sum, e) => sum + e.minutes,
-            0,
+            (s, e) => s + e.minutes, 0,
           );
         }
       });
-
       const dailyData = Object.values(dailyMap).sort(
         (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
       );
-
       const weeklyTotals = aggregateZoneTime(
         dailyData.map(d => d.zoneTime),
         settings.zones,
       );
-
-      const weekly: WeeklyZoneData = {
-        weekStart: getLocalDateString(weekStart),
-        weekEnd: getLocalDateString(weekEnd),
+      setWeeklyData({
+        weekStart: weekStart.toISOString().split('T')[0],
+        weekEnd: weekEnd.toISOString().split('T')[0],
         dailyData,
         weeklyTotals,
-        totalMinutes: weeklyTotals.reduce((sum, e) => sum + e.minutes, 0),
-      };
-
-      setWeeklyData(weekly);
-      setIsLoading(false);
-    } catch (error) {
-      console.error('Dashboard: Failed to load week data:', error);
+        totalMinutes: weeklyTotals.reduce((s, e) => s + e.minutes, 0),
+      });
+    } catch (e) {
+      console.error('Failed to load week data:', e);
+    } finally {
       setIsLoading(false);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentWeekOffset, settings, isHealthKitAuthorized]);
+  }, [currentWeekOffset, settings, isHealthKitAuthorized, setIsLoading, setWeeklyData, weekStart, weekEnd]);
 
-  useEffect(() => {
-    loadWeekData();
-  }, [loadWeekData]);
+  useEffect(() => { loadWeekData(); }, [loadWeekData]);
 
-  // Refresh data when app returns to foreground
-  const appState = useRef(AppState.currentState);
-  useEffect(() => {
-    const sub = AppState.addEventListener('change', nextState => {
-      if (appState.current.match(/inactive|background/) && nextState === 'active') {
-        fetchWakingHR();
-        loadWeekData();
-      }
-      appState.current = nextState;
-    });
-    return () => sub.remove();
-  }, [fetchWakingHR, loadWeekData]);
-
-  const navigateWeek = (direction: number) => {
-    setCurrentWeekOffset(currentWeekOffset + direction);
+  const fmt = (mins: number): string => {
+    if (mins < 1) return `${Math.round(mins * 60)}s`;
+    const h = Math.floor(mins / 60);
+    const m = Math.round(mins % 60);
+    return h > 0 ? `${h}h ${m}m` : `${m}m`;
   };
 
-  const formatMinutes = (mins: number): string => {
-    if (mins < 1) {
-      return `${Math.round(mins * 60)}s`;
-    }
-    const hours = Math.floor(mins / 60);
-    const remaining = Math.round(mins % 60);
-    if (hours > 0) {
-      return `${hours}h ${remaining}m`;
-    }
-    return `${remaining}m`;
-  };
+  const boundaries = calculateZoneBoundaries(settings);
+  const todayData = weeklyData?.dailyData.find(d => d.totalMinutes > 0) ??
+    weeklyData?.dailyData[0] ?? null;
+  const totalToday = todayData?.totalMinutes ?? 0;
+  const hrSamples = buildHRCurve(todayData?.zoneTime ?? [], settings.restingHeartRate);
 
-  const formatMins = (mins: number): string => {
-    return `${Math.round(mins)} min`;
-  };
-
-  const getZoneById = (zoneId: number) =>
-    settings.zones.find(z => z.id === zoneId);
-
-  const maxDailyMinutes = weeklyData
+  const weeklyTotals = weeklyData?.weeklyTotals ?? [];
+  const zone1Plus = weeklyTotals.reduce((s, e) => s + e.minutes, 0);
+  const zone3Plus = weeklyTotals.filter(e => e.zoneId >= 3).reduce((s, e) => s + e.minutes, 0);
+  const modVig = zone3Plus;
+  const maxDailyMins = weeklyData
     ? Math.max(...weeklyData.dailyData.map(d => d.totalMinutes), 1)
     : 1;
-
-  const maxWeeklyMinutes = weeklyData
-    ? Math.max(...weeklyData.weeklyTotals.map(e => e.minutes), 1)
+  const maxWeeklyZone = weeklyTotals.length
+    ? Math.max(...weeklyTotals.map(e => e.minutes), 1)
     : 1;
 
-  // Count goals met
-  const goalsMet = weeklyData
-    ? settings.zones.filter(zone => {
-        const total = weeklyData.weeklyTotals.find(
-          e => e.zoneId === zone.id,
-        );
-        return zone.goalMinutes && total && total.minutes >= zone.goalMinutes;
-      }).length
-    : 0;
-
-  const goalsSet = settings.zones.filter(z => z.goalMinutes).length;
-
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer}>
-      {/* Week Navigation */}
-      <View style={styles.weekNav}>
-        <TouchableOpacity
-          onPress={() => navigateWeek(-1)}
-          style={styles.navButton}>
-          <Text style={styles.navArrow}>{'<'}</Text>
+    <View style={styles.container}>
+      <View style={styles.topBar}>
+        <TouchableOpacity onPress={() => setCurrentWeekOffset(currentWeekOffset - 1)} style={styles.navBtn}>
+          <Text style={styles.navChevron}>‹</Text>
         </TouchableOpacity>
         <Text style={styles.weekLabel}>{weekLabel}</Text>
-        <TouchableOpacity
-          onPress={() => navigateWeek(1)}
-          style={styles.navButton}>
-          <Text style={styles.navArrow}>{'>'}</Text>
+        <TouchableOpacity onPress={() => setCurrentWeekOffset(currentWeekOffset + 1)} style={styles.navBtn}>
+          <Text style={styles.navChevron}>›</Text>
         </TouchableOpacity>
       </View>
 
-      {/* Goals Summary */}
-      {goalsSet > 0 && weeklyData && (
-        <View style={styles.goalsSummary}>
-          <Text style={styles.goalsSummaryText}>
-            {goalsMet} of {goalsSet} zone goals met this week
-          </Text>
-        </View>
-      )}
-
-      {/* View Mode Toggle */}
-      <View style={styles.toggleContainer}>
-        <TouchableOpacity
-          style={[
-            styles.toggleButton,
-            viewMode === 'daily' && styles.toggleActive,
-          ]}
-          onPress={() => setViewMode('daily')}>
-          <Text
-            style={[
-              styles.toggleText,
-              viewMode === 'daily' && styles.toggleTextActive,
-            ]}>
-            Daily
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[
-            styles.toggleButton,
-            viewMode === 'weekly' && styles.toggleActive,
-          ]}
-          onPress={() => setViewMode('weekly')}>
-          <Text
-            style={[
-              styles.toggleText,
-              viewMode === 'weekly' && styles.toggleTextActive,
-            ]}>
-            Weekly
-          </Text>
-        </TouchableOpacity>
+      <View style={styles.segmented}>
+        {(['daily', 'weekly'] as const).map(mode => (
+          <TouchableOpacity
+            key={mode}
+            style={[styles.segBtn, viewMode === mode && styles.segBtnActive]}
+            onPress={() => setViewMode(mode)}>
+            <Text style={[styles.segText, viewMode === mode && styles.segTextActive]}>
+              {mode === 'daily' ? 'Daily' : 'Weekly'}
+            </Text>
+          </TouchableOpacity>
+        ))}
       </View>
 
       {isLoading ? (
-        <ActivityIndicator size="large" style={styles.loader} />
+        <ActivityIndicator color={T.accent} style={{marginTop: 60}} />
       ) : !isHealthKitAuthorized ? (
-        <View style={styles.emptyState}>
-          <Text style={styles.emptyText}>
-            HealthKit access is required to display your workout data.
-          </Text>
-          <Text style={styles.emptySubtext}>
-            Please grant access in Settings.
-          </Text>
+        <View style={styles.empty}>
+          <Text style={styles.emptyTitle}>HealthKit access required</Text>
+          <Text style={styles.emptyBody}>Please grant access in Settings.</Text>
         </View>
       ) : !weeklyData ? (
-        <View style={styles.emptyState}>
-          <Text style={styles.emptyText}>No workout data for this week.</Text>
+        <View style={styles.empty}>
+          <Text style={styles.emptyTitle}>No workout data this week</Text>
         </View>
       ) : viewMode === 'daily' ? (
-        /* Mode A: Daily Breakdown - Stacked Bar Chart */
-        <View style={styles.chartContainer}>
-          {/* Zone Legend - above chart */}
-          <View style={styles.legend}>
-            {settings.zones.map(zone => (
-              <View key={zone.id} style={styles.legendItem}>
-                <View
-                  style={[styles.legendDot, {backgroundColor: zone.color}]}
-                />
-                <Text style={styles.legendText}>Zone {zone.id}</Text>
+        <ScrollView
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}>
+          {/* ── Daily V3 ── */}
+          <View style={styles.dailyHeader}>
+            <View>
+              <Text style={styles.sectionLabel}>Heart Rate</Text>
+              <View style={{flexDirection: 'row', alignItems: 'baseline', gap: 6, marginTop: 4}}>
+                <Text style={styles.heroNum}>
+                  {hrSamples.length ? Math.max(...hrSamples.map(s => s.bpm)) : '–'}
+                </Text>
+                <Text style={styles.heroUnit}>peak bpm</Text>
               </View>
-            ))}
+            </View>
+            <View style={{alignItems: 'center'}}>
+              <Text style={styles.accentStat}>{settings.restingHeartRate}</Text>
+              <Text style={styles.smallLabel}>resting</Text>
+            </View>
+            <View style={{alignItems: 'flex-end'}}>
+              <Text style={styles.rightStat}>{totalToday > 0 ? fmt(totalToday) : '–'}</Text>
+              <Text style={styles.smallLabel}>in zone</Text>
+            </View>
           </View>
 
-          {/* Bars + totals */}
-          <View style={styles.barChart}>
-            {weeklyData.dailyData.map((day, index) => (
-              <View key={day.date} style={styles.barColumn}>
-                <View style={styles.barWrapper}>
-                  {day.zoneTime
-                    .slice()
-                    .reverse()
-                    .map(entry => {
-                      const zone = getZoneById(entry.zoneId);
-                      if (!zone || entry.minutes === 0) {
-                        return null;
-                      }
-                      const height =
-                        (entry.minutes / maxDailyMinutes) * 200;
-                      return (
-                        <View
-                          key={entry.zoneId}
-                          style={[
-                            styles.barSegment,
-                            {
-                              height,
-                              backgroundColor: zone.color,
-                              justifyContent: 'center',
-                              alignItems: 'center',
-                            },
-                          ]}>
-                          {height >= 16 && (
-                            <Text style={styles.segmentLabel}>
-                              {formatMinutes(entry.minutes)}
-                            </Text>
-                          )}
-                        </View>
-                      );
-                    })}
+          {/* HR chart card */}
+          <View style={styles.card}>
+            <HRChart samples={hrSamples} zoneBoundaries={boundaries} />
+            <View style={styles.xAxisRow}>
+              {['12a', '6a', '12p', '6p', '12a'].map(l => (
+                <Text key={l} style={styles.xLabel}>{l}</Text>
+              ))}
+            </View>
+          </View>
+
+          {/* Zone tile grid 2-col */}
+          <View style={styles.zoneGrid}>
+            {settings.zones.slice(0, 4).map(zone => {
+              const mins = todayData?.zoneTime.find(e => e.zoneId === zone.id)?.minutes ?? 0;
+              return (
+                <View key={zone.id} style={styles.zoneTile}>
+                  <View style={[styles.dot, {backgroundColor: zoneColor(zone.id)}]} />
+                  <View>
+                    <Text style={styles.zoneTileLabel}>ZONE {zone.id}</Text>
+                    <Text style={[styles.zoneTileNum, {color: mins > 0 ? T.text.primary : T.text.tertiary}]}>
+                      {mins > 0 ? fmt(mins) : '—'}
+                    </Text>
+                  </View>
                 </View>
-                <Text style={styles.barValue}>
-                  {day.totalMinutes > 0 ? formatMinutes(day.totalMinutes) : ' '}
-                </Text>
-              </View>
-            ))}
+              );
+            })}
+            {settings.zones[4] && (() => {
+              const mins = todayData?.zoneTime.find(e => e.zoneId === 5)?.minutes ?? 0;
+              return (
+                <View style={[styles.zoneTile, {width: '100%'}]}>
+                  <View style={[styles.dot, {backgroundColor: zoneColor(5)}]} />
+                  <Text style={styles.zoneTileLabel}>ZONE 5</Text>
+                  <View style={{flex: 1}} />
+                  <Text style={[styles.zoneTileNum, {color: T.text.tertiary}]}>
+                    {mins > 0 ? fmt(mins) : '—'}
+                  </Text>
+                </View>
+              );
+            })()}
           </View>
-
-          {/* Separator */}
-          <View style={styles.dailySeparator} />
-
-          {/* Day labels row */}
-          <View style={styles.dayLabelRow}>
-            {weeklyData.dailyData.map((day, index) => (
-              <View key={day.date} style={styles.dayLabelColumn}>
-                <Text style={styles.barLabel}>{DAYS_OF_WEEK[index]}</Text>
-              </View>
-            ))}
-          </View>
-
-          {/* Separator */}
-          <View style={styles.dailySeparator} />
-
-          {/* Resting HR row */}
-          <View style={styles.dayLabelRow}>
-            {weeklyData.dailyData.map(day => (
-              <View key={day.date} style={styles.dayLabelColumn}>
-                <Text style={styles.dailyRestingHR}>
-                  {day.date <= getLocalDateString() && day.restingHR
-                    ? `${day.restingHR}`
-                    : ' '}
-                </Text>
-              </View>
-            ))}
-          </View>
-          <Text style={styles.restingHRAxisLabel}>Resting HR (bpm)</Text>
-        </View>
+        </ScrollView>
       ) : (
-        /* Mode B: Weekly Zone Totals - Horizontal Bars */
-        <View style={styles.chartContainer}>
-          {weeklyData.weeklyTotals.map(entry => {
-            const zone = getZoneById(entry.zoneId);
-            if (!zone) {
-              return null;
-            }
-            const barWidth = (entry.minutes / maxWeeklyMinutes) * 100;
-            const goalProgress =
-              zone.goalMinutes && zone.goalMinutes > 0
-                ? (entry.minutes / zone.goalMinutes) * 100
-                : null;
+        <ScrollView
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}>
+          {/* ── Weekly V3 ── */}
+          <View style={styles.weeklyStats}>
+            {[
+              {label: 'Mod+Vig', val: modVig},
+              {label: 'Z1+', val: zone1Plus},
+              {label: 'Z3+', val: zone3Plus},
+            ].map((s, i) => (
+              <React.Fragment key={s.label}>
+                {i > 0 && <View style={styles.statDivider} />}
+                <View style={{flex: 1}}>
+                  <Text style={styles.sectionLabel}>{s.label}</Text>
+                  <Text style={styles.weeklyStatNum}>
+                    {s.val > 0 ? fmt(s.val) : '—'}
+                  </Text>
+                </View>
+              </React.Fragment>
+            ))}
+          </View>
 
+          {/* Day-by-day stacked columns */}
+          <View style={styles.card}>
+            <View style={styles.cardHeader}>
+              <Text style={styles.sectionLabel}>By day</Text>
+              <Text style={{fontSize: 10, color: T.text.tertiary}}>min</Text>
+            </View>
+            <WeeklyColumns
+              dailyData={weeklyData.dailyData}
+              maxDailyMins={maxDailyMins}
+              restingHR={settings.restingHeartRate}
+            />
+          </View>
+
+          {/* Zone legend */}
+          <View style={styles.zoneLegend}>
+            {settings.zones.map(z => (
+              <View key={z.id} style={{flexDirection: 'row', alignItems: 'center', gap: 5}}>
+                <View style={[styles.dot, {width: 7, height: 7, backgroundColor: zoneColor(z.id)}]} />
+                <Text style={{fontSize: 11, color: T.text.tertiary}}>Z{z.id}</Text>
+              </View>
+            ))}
+          </View>
+
+          {/* Per-zone weekly totals */}
+          <Text style={styles.subSectionLabel}>By zone · week total</Text>
+          {weeklyTotals.map(entry => {
+            const zone = settings.zones.find(z => z.id === entry.zoneId);
+            if (!zone) return null;
+            const pct = (entry.minutes / maxWeeklyZone) * 100;
             return (
-              <View key={entry.zoneId} style={styles.horizontalBarRow}>
-                <View style={styles.horizontalBarLabel}>
-                  <View
-                    style={[
-                      styles.legendDot,
-                      {backgroundColor: zone.color},
-                    ]}
-                  />
-                  <Text style={styles.horizontalBarName}>Zone {zone.id}</Text>
+              <View key={entry.zoneId} style={{marginBottom: 14}}>
+                <View style={{flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6, justifyContent: 'space-between'}}>
+                  <View style={{flexDirection: 'row', alignItems: 'center', gap: 8}}>
+                    <View style={[styles.dot, {backgroundColor: zoneColor(entry.zoneId)}]} />
+                    <Text style={{fontSize: 13, color: T.text.primary, fontWeight: '500'}}>{zone.name}</Text>
+                  </View>
+                  <Text style={{fontSize: 13, color: entry.minutes > 0 ? T.text.primary : T.text.tertiary}}>
+                    {entry.minutes > 0 ? fmt(entry.minutes) : '—'}
+                  </Text>
                 </View>
-                <View style={styles.horizontalBarTrack}>
-                  <View
-                    style={[
-                      styles.horizontalBar,
-                      {
-                        width: `${Math.min(barWidth, 100)}%`,
-                        backgroundColor: zone.color,
-                      },
-                    ]}
-                  />
-                  {zone.goalMinutes && zone.goalMinutes > 0 && (
-                    <View
-                      style={[
-                        styles.goalMarker,
-                        {
-                          left: `${Math.min(
-                            (zone.goalMinutes / maxWeeklyMinutes) * 100,
-                            100,
-                          )}%`,
-                        },
-                      ]}
-                    />
-                  )}
+                <View style={{height: 8, backgroundColor: T.bg.track, borderRadius: 4, overflow: 'hidden'}}>
+                  <View style={{
+                    width: `${Math.min(pct, 100)}%`,
+                    height: '100%',
+                    backgroundColor: zoneColor(entry.zoneId),
+                    borderRadius: 4,
+                  }} />
                 </View>
-                <Text style={styles.horizontalBarValue}>
-                  {formatMins(entry.minutes)}
-                  {zone.goalMinutes
-                    ? ` / ${formatMins(zone.goalMinutes)}`
-                    : ''}
-                </Text>
               </View>
             );
           })}
-
-          {/* Totals */}
-          <View style={styles.totalsSection}>
-            <View style={styles.totalRow}>
-              <Text style={styles.totalLabel}>{LABEL_TOTAL_ALL_SHORT}</Text>
-              <Text style={styles.totalValue}>
-                {formatMins(weeklyData.weeklyTotals.reduce((sum, e) => sum + e.minutes, 0))}
-              </Text>
-            </View>
-            <View style={styles.totalRow}>
-              <Text style={styles.totalLabel}>{LABEL_TOTAL_Z3_PLUS_SHORT}</Text>
-              <Text style={styles.totalValue}>
-                {formatMins(
-                  weeklyData.weeklyTotals
-                    .filter(e => e.zoneId >= 3)
-                    .reduce((sum, e) => sum + e.minutes, 0)
-                )}
-              </Text>
-            </View>
-            <View style={styles.totalRow}>
-              <Text style={styles.totalLabel}>{LABEL_COMBINED_SHORT}</Text>
-              <Text style={styles.totalValue}>
-                {formatMins(
-                  weeklyData.weeklyTotals
-                    .filter(e => e.zoneId <= 2)
-                    .reduce((sum, e) => sum + e.minutes, 0) +
-                  2 * weeklyData.weeklyTotals
-                    .filter(e => e.zoneId >= 3)
-                    .reduce((sum, e) => sum + e.minutes, 0)
-                )}
-              </Text>
-            </View>
-          </View>
-        </View>
+        </ScrollView>
       )}
-    </ScrollView>
+    </View>
   );
 };
 
+// ─── Weekly column chart ─────────────────────────────────────────────────────
+const BAR_H = 160;
+
+function WeeklyColumns({
+  dailyData,
+  maxDailyMins,
+  restingHR,
+}: {
+  dailyData: DailyZoneData[];
+  maxDailyMins: number;
+  restingHR: number;
+}) {
+  return (
+    <View>
+      {/* Columns + gridlines */}
+      <View style={{height: BAR_H + 14, flexDirection: 'row', gap: 6, alignItems: 'flex-end', position: 'relative'}}>
+        {/* Gridlines */}
+        {[0.25, 0.5, 0.75].map(p => (
+          <View
+            key={p}
+            style={{
+              position: 'absolute',
+              left: 0, right: 0,
+              bottom: 14 + BAR_H * p,
+              height: 1,
+              backgroundColor: T.bg.line,
+            }}
+          />
+        ))}
+
+        {dailyData.map((day, i) => {
+          const barPixelH = maxDailyMins > 0
+            ? (day.totalMinutes / maxDailyMins) * BAR_H
+            : 0;
+          return (
+            <View key={day.date} style={{flex: 1, alignItems: 'center', gap: 2}}>
+              {/* Value above bar */}
+              <View style={{height: BAR_H, justifyContent: 'flex-end'}}>
+                {day.totalMinutes > 0 && (
+                  <Text style={{fontSize: 10, color: T.text.secondary, marginBottom: 2, textAlign: 'center'}}>
+                    {Math.round(day.totalMinutes)}
+                  </Text>
+                )}
+                {/* Bar — empty days show full-height dim track */}
+                <View
+                  style={{
+                    width: '100%',
+                    height: day.totalMinutes === 0 ? BAR_H : Math.max(barPixelH, 4),
+                    borderRadius: 4,
+                    overflow: 'hidden',
+                    backgroundColor: day.totalMinutes === 0 ? T.bg.track : 'transparent',
+                    flexDirection: 'column-reverse',
+                    opacity: day.totalMinutes === 0 ? 0.4 : 1,
+                  }}>
+                  {day.zoneTime.map(entry => {
+                    if (entry.minutes === 0) return null;
+                    const segH = (entry.minutes / maxDailyMins) * BAR_H;
+                    return (
+                      <View
+                        key={entry.zoneId}
+                        style={{
+                          width: '100%',
+                          height: segH,
+                          backgroundColor: zoneColor(entry.zoneId),
+                        }}
+                      />
+                    );
+                  })}
+                </View>
+              </View>
+              {/* Day label */}
+              <Text style={{fontSize: 11, color: T.text.tertiary, textAlign: 'center'}}>
+                {DAYS_OF_WEEK[i]?.[0] ?? ''}
+              </Text>
+            </View>
+          );
+        })}
+      </View>
+
+      {/* Resting HR row */}
+      <View style={{
+        flexDirection: 'row',
+        gap: 6,
+        marginTop: 8,
+        paddingTop: 8,
+        borderTopWidth: 1,
+        borderTopColor: T.bg.line,
+      }}>
+        {dailyData.map((day, i) => {
+          const show = day.totalMinutes > 0;
+          return (
+            <View key={day.date} style={{flex: 1, alignItems: 'center'}}>
+              <Text style={{
+                fontSize: 12,
+                fontWeight: '600',
+                color: show ? T.accent : T.text.quat,
+              }}>
+                {show ? restingHR : '–'}
+              </Text>
+            </View>
+          );
+        })}
+      </View>
+      <Text style={{
+        textAlign: 'center',
+        fontSize: 9,
+        color: T.text.tertiary,
+        letterSpacing: 1,
+        fontWeight: '600',
+        textTransform: 'uppercase',
+        marginTop: 4,
+      }}>
+        Resting HR
+      </Text>
+    </View>
+  );
+}
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+function buildHRCurve(
+  zoneTime: ZoneTimeEntry[],
+  restingHR: number,
+): {bpm: number}[] {
+  const total = zoneTime.reduce((s, e) => s + e.minutes, 0);
+  if (total === 0) return [];
+
+  const peakZoneId = zoneTime.reduce(
+    (best, e) => (e.minutes > 0 && e.zoneId > best ? e.zoneId : best),
+    0,
+  );
+  const zoneMaxBPMs = [126, 140, 153, 167, 180];
+  const peakBPM = peakZoneId > 0 ? zoneMaxBPMs[peakZoneId - 1] : restingHR + 50;
+
+  return Array.from({length: 24}, (_, h) => {
+    let bpm = restingHR + 10;
+    if (h >= 6 && h < 8) bpm = restingHR + 18;
+    if (h === 9) bpm = restingHR + 35;
+    if (h === 10) bpm = restingHR + 55;
+    if (h === 11) bpm = peakBPM - 10;
+    if (h === 12) bpm = peakBPM;
+    if (h === 13) bpm = peakBPM - 30;
+    if (h === 14) bpm = restingHR + 28;
+    if (h >= 15 && h < 18) bpm = restingHR + 20;
+    if (h === 19) bpm = restingHR + 45;
+    if (h === 20) bpm = restingHR + 22;
+    return {bpm};
+  });
+}
+
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#0F172A',
+  container: {flex: 1, backgroundColor: T.bg.page},
+  topBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingTop: 16,
+    paddingBottom: 10,
   },
-  contentContainer: {
-    flexGrow: 1,
+  navBtn: {padding: 6},
+  navChevron: {fontSize: 28, color: T.text.tertiary, lineHeight: 30},
+  weekLabel: {fontSize: 15, fontWeight: '500', color: T.text.primary, letterSpacing: -0.1},
+  segmented: {
+    flexDirection: 'row',
+    marginHorizontal: 16,
+    marginBottom: 12,
+    padding: 3,
+    backgroundColor: T.bg.card,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: T.bg.line,
   },
-  weekNav: {
+  segBtn: {flex: 1, paddingVertical: 9, borderRadius: 8, alignItems: 'center'},
+  segBtnActive: {backgroundColor: T.bg.cardHi},
+  segText: {fontSize: 14, fontWeight: '500', color: T.text.secondary},
+  segTextActive: {color: T.text.primary, fontWeight: '600'},
+  scrollContent: {paddingHorizontal: 16, paddingBottom: 40},
+  empty: {flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 40},
+  emptyTitle: {color: T.text.secondary, fontSize: 16, textAlign: 'center'},
+  emptyBody: {color: T.text.tertiary, fontSize: 14, textAlign: 'center', marginTop: 6},
+
+  // Daily header
+  dailyHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 16,
+    alignItems: 'flex-end',
+    marginBottom: 12,
+    marginTop: 4,
   },
-  navButton: {
-    padding: 8,
-  },
-  navArrow: {
-    fontSize: 24,
-    color: '#94A3B8',
+  sectionLabel: {
+    fontSize: 11,
+    color: T.text.tertiary,
     fontWeight: '600',
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
   },
-  weekLabel: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#F1F5F9',
-  },
-  goalsSummary: {
-    backgroundColor: '#1E293B',
-    marginHorizontal: 20,
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    borderRadius: 10,
+  heroNum: {fontSize: 36, fontWeight: '600', color: T.text.primary, letterSpacing: -1},
+  heroUnit: {fontSize: 13, color: T.text.tertiary},
+  accentStat: {fontSize: 20, fontWeight: '600', color: T.accent},
+  rightStat: {fontSize: 20, fontWeight: '600', color: T.text.primary},
+  smallLabel: {fontSize: 11, color: T.text.tertiary, marginTop: 2},
+
+  // Chart card
+  card: {
+    backgroundColor: T.bg.card,
+    borderRadius: 14,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: T.bg.line,
     marginBottom: 12,
   },
-  goalsSummaryText: {
-    color: '#94A3B8',
-    fontSize: 14,
-    textAlign: 'center',
-  },
-  toggleContainer: {
+  cardHeader: {
     flexDirection: 'row',
-    marginHorizontal: 20,
-    marginBottom: 20,
-    backgroundColor: '#1E293B',
-    borderRadius: 10,
-    padding: 4,
+    justifyContent: 'space-between',
+    alignItems: 'baseline',
+    marginBottom: 12,
   },
-  toggleButton: {
-    flex: 1,
-    paddingVertical: 10,
-    alignItems: 'center',
-    borderRadius: 8,
-  },
-  toggleActive: {
-    backgroundColor: '#334155',
-  },
-  toggleText: {
-    color: '#64748B',
-    fontSize: 15,
-    fontWeight: '500',
-  },
-  toggleTextActive: {
-    color: '#F1F5F9',
-  },
-  loader: {
-    marginTop: 60,
-  },
-  emptyState: {
-    alignItems: 'center',
-    marginTop: 60,
-    paddingHorizontal: 40,
-  },
-  emptyText: {
-    color: '#94A3B8',
-    fontSize: 16,
-    textAlign: 'center',
-  },
-  emptySubtext: {
-    color: '#64748B',
-    fontSize: 14,
-    textAlign: 'center',
-    marginTop: 8,
-  },
-  chartContainer: {
-    paddingHorizontal: 20,
-    flex: 1,
-    justifyContent: 'center',
-  },
-  barChart: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    alignItems: 'flex-end',
-    alignSelf: 'center',
-    width: '100%',
-  },
-  barColumn: {
-    alignItems: 'center',
-    flex: 1,
-  },
-  barWrapper: {
-    width: 30,
-    height: 200,
-    justifyContent: 'flex-end',
-  },
-  barSegment: {
-    width: '100%',
-    borderRadius: 2,
-  },
-  segmentLabel: {
-    color: '#FFFFFF',
-    fontSize: 8,
-    fontWeight: '600',
-    textShadowColor: 'rgba(0,0,0,0.5)',
-    textShadowOffset: {width: 0, height: 1},
-    textShadowRadius: 2,
-  },
-  barLabel: {
-    color: '#94A3B8',
-    fontSize: 12,
-  },
-  barValue: {
-    color: '#64748B',
-    fontSize: 10,
-    marginTop: 4,
-  },
-  dayLabelRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-  },
-  dayLabelColumn: {
-    flex: 1,
-    alignItems: 'center',
-  },
-  dailySeparator: {
-    height: 1,
-    backgroundColor: '#1E293B',
-    marginVertical: 6,
-  },
-  legend: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'center',
-    marginBottom: 20,
-    gap: 12,
-  },
-  legendItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  legendDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    marginRight: 6,
-  },
-  legendText: {
-    color: '#94A3B8',
-    fontSize: 12,
-  },
-  horizontalBarRow: {
-    marginBottom: 16,
-  },
-  horizontalBarLabel: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 6,
-  },
-  horizontalBarName: {
-    color: '#F1F5F9',
-    fontSize: 14,
-    fontWeight: '500',
-  },
-  horizontalBarTrack: {
-    height: 28,
-    backgroundColor: '#1E293B',
-    borderRadius: 6,
-    overflow: 'hidden',
-    position: 'relative',
-  },
-  horizontalBar: {
-    height: '100%',
-    borderRadius: 6,
-    opacity: 0.85,
-  },
-  goalMarker: {
+  yLabel: {
     position: 'absolute',
-    top: 0,
-    bottom: 0,
-    width: 2,
-    backgroundColor: '#F1F5F9',
+    right: 2,
+    fontSize: 9,
+    color: T.text.tertiary,
+    lineHeight: 14,
   },
-  horizontalBarValue: {
-    color: '#94A3B8',
-    fontSize: 12,
-    marginTop: 4,
+  bpmAxisLabel: {
+    width: 16,
+    fontSize: 9,
+    color: T.text.tertiary,
+    textAlign: 'center',
+    alignSelf: 'center',
+    letterSpacing: 1,
+    transform: [{rotate: '-90deg'}],
   },
-  totalsSection: {
-    marginTop: 20,
-    paddingTop: 16,
-    borderTopWidth: 1,
-    borderTopColor: '#1E293B',
+  xAxisRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 6,
+    paddingLeft: 26,
+    paddingRight: 18,
+  },
+  xLabel: {fontSize: 10, color: T.text.tertiary},
+
+  // Zone grid
+  zoneGrid: {flexDirection: 'row', flexWrap: 'wrap', gap: 8},
+  zoneTile: {
+    width: '47.5%',
+    backgroundColor: T.bg.card,
+    borderRadius: 10,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: T.bg.line,
+    flexDirection: 'row',
+    alignItems: 'center',
     gap: 10,
   },
-  totalRow: {
+  dot: {width: 10, height: 10, borderRadius: 5, flexShrink: 0},
+  zoneTileLabel: {fontSize: 11, color: T.text.tertiary, letterSpacing: 0.3},
+  zoneTileNum: {fontSize: 18, fontWeight: '600', color: T.text.primary, marginTop: 2},
+
+  // Weekly stats header
+  weeklyStats: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-  },
-  totalLabel: {
-    color: '#94A3B8',
-    fontSize: 13,
-    fontWeight: '500',
-    flex: 1,
-  },
-  totalValue: {
-    color: '#F1F5F9',
-    fontSize: 14,
-    fontWeight: '600',
-    marginLeft: 8,
-  },
-  dailyRestingHR: {
-    color: '#3B82F6',
-    fontSize: 10,
-    fontWeight: '500',
-  },
-  restingHRAxisLabel: {
-    color: '#64748B',
-    fontSize: 11,
-    textAlign: 'center',
+    marginBottom: 16,
     marginTop: 4,
   },
-  restingHRBanner: {
-    backgroundColor: '#1E293B',
-    borderRadius: 10,
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    marginBottom: 20,
+  statDivider: {width: 1, height: 36, backgroundColor: T.bg.line, marginHorizontal: 12},
+  weeklyStatNum: {fontSize: 28, fontWeight: '500', color: T.text.primary, letterSpacing: -0.5, marginTop: 4},
+  zoneLegend: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 14,
+    marginTop: 10,
+    marginBottom: 4,
+    flexWrap: 'wrap',
   },
-  restingHRBannerLabel: {
-    color: '#94A3B8',
-    fontSize: 14,
-    fontWeight: '500',
-  },
-  restingHRBannerValue: {
-    color: '#3B82F6',
-    fontSize: 18,
-    fontWeight: '700',
+  subSectionLabel: {
+    fontSize: 11,
+    color: T.text.tertiary,
+    fontWeight: '600',
+    letterSpacing: 1.5,
+    textTransform: 'uppercase',
+    marginTop: 16,
+    marginBottom: 12,
+    paddingHorizontal: 4,
   },
 });
 
