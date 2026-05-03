@@ -5,6 +5,8 @@
   "scripts": {
     "android": "react-native run-android",
     "ios": "react-native run-ios",
+    "ios:dev": "scripts/deploy-ios.sh Debug",
+    "ios:prod": "scripts/deploy-ios.sh Release",
     "lint": "eslint .",
     "start": "react-native start",
     "test": "jest --testPathIgnorePatterns='__tests__/App'"
