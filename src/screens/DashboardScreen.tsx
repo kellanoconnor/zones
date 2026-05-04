@@ -1,4 +1,4 @@
-import React, {useEffect, useCallback, useMemo} from 'react';
+import React, {useEffect, useCallback, useMemo, useState} from 'react';
 import {
   View,
   Text,
@@ -20,18 +20,23 @@ import {
   aggregateZoneTime,
 } from '../services/ZoneEngine';
 import {getWorkoutsWithHeartRate} from '../services/HealthKitService';
-import {DailyZoneData, WeeklyZoneData, ZoneTimeEntry} from '../types';
+import {DailyZoneData, WeeklyZoneData, ZoneTimeEntry, WorkoutData, HeartRateSample} from '../types';
 import {DAYS_OF_WEEK, getLocalDateString} from '../utils/constants';
 import {T, zoneColor} from '../utils/theme';
 
 const SCREEN_W = Dimensions.get('window').width;
 
 // ─── HR chart (Daily V3) ─────────────────────────────────────────────────────
+// Plots real heart-rate samples over a 24-hour x-axis using local time.
+// Samples more than 5 minutes apart start a new path segment so we don't
+// draw a misleading flat line across periods with no data.
+const SEGMENT_GAP_MS = 5 * 60 * 1000;
+
 function HRChart({
   samples,
   zoneBoundaries,
 }: {
-  samples: {bpm: number}[];
+  samples: HeartRateSample[];
   zoneBoundaries: {zoneId: number; lowerTHR: number; upperTHR: number}[];
 }) {
   const W = 300;
@@ -39,22 +44,45 @@ function HRChart({
   const minBPM = 40;
   const maxBPM = 200;
   const yFor = (v: number) => H - ((v - minBPM) / (maxBPM - minBPM)) * H;
+  // x = fraction of the local-time day (0-24h) → 0..W
+  const xFor = (ts: Date) =>
+    ((ts.getHours() + ts.getMinutes() / 60 + ts.getSeconds() / 3600) / 24) * W;
 
-  let pathD = '';
-  let fillD = '';
-  if (samples.length > 1) {
-    const xFor = (i: number) => (i / (samples.length - 1)) * W;
-    pathD = `M ${xFor(0)} ${yFor(samples[0].bpm)}`;
-    for (let i = 1; i < samples.length; i++) {
-      const x0 = xFor(i - 1);
-      const y0 = yFor(samples[i - 1].bpm);
-      const x1 = xFor(i);
-      const y1 = yFor(samples[i].bpm);
-      const cx = (x0 + x1) / 2;
-      pathD += ` C ${cx} ${y0}, ${cx} ${y1}, ${x1} ${y1}`;
+  // Sort + segment by gap so disjoint workouts don't get visually connected.
+  const segments: HeartRateSample[][] = [];
+  if (samples.length > 0) {
+    const sorted = [...samples].sort(
+      (a, b) => a.timestamp.getTime() - b.timestamp.getTime(),
+    );
+    let current: HeartRateSample[] = [sorted[0]];
+    for (let i = 1; i < sorted.length; i++) {
+      const gap = sorted[i].timestamp.getTime() - sorted[i - 1].timestamp.getTime();
+      if (gap > SEGMENT_GAP_MS) {
+        if (current.length > 0) segments.push(current);
+        current = [];
+      }
+      current.push(sorted[i]);
     }
-    fillD = pathD + ` L ${W} ${H} L 0 ${H} Z`;
+    if (current.length > 0) segments.push(current);
   }
+
+  const segmentPaths = segments
+    .filter(seg => seg.length > 1)
+    .map(seg => {
+      let d = `M ${xFor(seg[0].timestamp)} ${yFor(seg[0].bpm)}`;
+      for (let i = 1; i < seg.length; i++) {
+        const x0 = xFor(seg[i - 1].timestamp);
+        const y0 = yFor(seg[i - 1].bpm);
+        const x1 = xFor(seg[i].timestamp);
+        const y1 = yFor(seg[i].bpm);
+        const cx = (x0 + x1) / 2;
+        d += ` C ${cx} ${y0}, ${cx} ${y1}, ${x1} ${y1}`;
+      }
+      const firstX = xFor(seg[0].timestamp);
+      const lastX = xFor(seg[seg.length - 1].timestamp);
+      const fill = d + ` L ${lastX} ${H} L ${firstX} ${H} Z`;
+      return {d, fill};
+    });
 
   const yLabels = [180, 150, 120, 90, 60];
 
@@ -104,17 +132,20 @@ function HRChart({
               strokeWidth="1"
             />
           ))}
-          {fillD ? <Path d={fillD} fill="url(#hrFill)" /> : null}
-          {pathD ? (
+          {segmentPaths.map((seg, i) => (
+            <Path key={`fill-${i}`} d={seg.fill} fill="url(#hrFill)" />
+          ))}
+          {segmentPaths.map((seg, i) => (
             <Path
-              d={pathD}
+              key={`stroke-${i}`}
+              d={seg.d}
               fill="none"
               stroke={T.accent}
               strokeWidth="1.5"
               strokeLinejoin="round"
               vectorEffect="non-scaling-stroke"
             />
-          ) : null}
+          ))}
         </Svg>
       </View>
 
@@ -139,6 +170,10 @@ const DashboardScreen: React.FC = () => {
     setIsLoading,
   } = useStore();
 
+  // Raw workouts kept locally so the Daily HR chart can plot real samples
+  // by their actual timestamps. weeklyData drops them after aggregation.
+  const [workouts, setWorkouts] = useState<WorkoutData[]>([]);
+
   // Memoize so the Date refs are stable across renders. Without this,
   // each render produces new Dates -> useCallback dep change ->
   // loadWeekData identity churn -> useEffect refires -> infinite spinner.
@@ -153,7 +188,8 @@ const DashboardScreen: React.FC = () => {
     setIsLoading(true);
     try {
       const boundaries = calculateZoneBoundaries(settings);
-      const workouts = await getWorkoutsWithHeartRate(weekStart, weekEnd);
+      const fetched = await getWorkoutsWithHeartRate(weekStart, weekEnd);
+      setWorkouts(fetched);
       const dailyMap: Record<string, DailyZoneData> = {};
       for (let i = 0; i < 7; i++) {
         const day = new Date(weekStart);
@@ -165,7 +201,7 @@ const DashboardScreen: React.FC = () => {
           totalMinutes: 0,
         };
       }
-      workouts.forEach(workout => {
+      fetched.forEach(workout => {
         if (workout.heartRateSamples.length === 0) return;
         const dateStr = getLocalDateString(workout.startDate);
         if (dailyMap[dateStr]) {
@@ -217,7 +253,14 @@ const DashboardScreen: React.FC = () => {
   const todayData = weeklyData?.dailyData.find(d => d.totalMinutes > 0) ??
     weeklyData?.dailyData[0] ?? null;
   const totalToday = todayData?.totalMinutes ?? 0;
-  const hrSamples = buildHRCurve(todayData?.zoneTime ?? [], settings.restingHeartRate);
+  // Real heart-rate samples for the displayed day, plotted by local-time
+  // timestamp by HRChart.
+  const hrSamples = useMemo<HeartRateSample[]>(() => {
+    if (!todayData) return [];
+    return workouts
+      .filter(w => getLocalDateString(w.startDate) === todayData.date)
+      .flatMap(w => w.heartRateSamples);
+  }, [workouts, todayData]);
 
   const weeklyTotals = weeklyData?.weeklyTotals ?? [];
   const zone1Plus = weeklyTotals.reduce((s, e) => s + e.minutes, 0);
@@ -301,9 +344,9 @@ const DashboardScreen: React.FC = () => {
             </View>
           </View>
 
-          {/* Zone tile grid 2-col */}
+          {/* Zone tile grid: 5 zones + Total in a 2-col layout */}
           <View style={styles.zoneGrid}>
-            {settings.zones.slice(0, 4).map(zone => {
+            {settings.zones.map(zone => {
               const mins = todayData?.zoneTime.find(e => e.zoneId === zone.id)?.minutes ?? 0;
               return (
                 <View key={zone.id} style={styles.zoneTile}>
@@ -317,19 +360,15 @@ const DashboardScreen: React.FC = () => {
                 </View>
               );
             })}
-            {settings.zones[4] && (() => {
-              const mins = todayData?.zoneTime.find(e => e.zoneId === 5)?.minutes ?? 0;
-              return (
-                <View style={[styles.zoneTile, {width: '100%'}]}>
-                  <View style={[styles.dot, {backgroundColor: zoneColor(5)}]} />
-                  <Text style={styles.zoneTileLabel}>ZONE 5</Text>
-                  <View style={{flex: 1}} />
-                  <Text style={[styles.zoneTileNum, {color: T.text.tertiary}]}>
-                    {mins > 0 ? fmt(mins) : '—'}
-                  </Text>
-                </View>
-              );
-            })()}
+            <View style={styles.zoneTile}>
+              <View style={[styles.dot, {backgroundColor: T.accent}]} />
+              <View>
+                <Text style={styles.zoneTileLabel}>TOTAL</Text>
+                <Text style={[styles.zoneTileNum, {color: totalToday > 0 ? T.text.primary : T.text.tertiary}]}>
+                  {totalToday > 0 ? fmt(totalToday) : '—'}
+                </Text>
+              </View>
+            </View>
           </View>
         </ScrollView>
       ) : (
@@ -389,7 +428,7 @@ const DashboardScreen: React.FC = () => {
                 <View style={{flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6, justifyContent: 'space-between'}}>
                   <View style={{flexDirection: 'row', alignItems: 'center', gap: 8}}>
                     <View style={[styles.dot, {backgroundColor: zoneColor(entry.zoneId)}]} />
-                    <Text style={{fontSize: 13, color: T.text.primary, fontWeight: '500'}}>{zone.name}</Text>
+                    <Text style={{fontSize: 13, color: T.text.primary, fontWeight: '500'}}>Zone {entry.zoneId}</Text>
                   </View>
                   <Text style={{fontSize: 13, color: entry.minutes > 0 ? T.text.primary : T.text.tertiary}}>
                     {entry.minutes > 0 ? fmt(entry.minutes) : '—'}
@@ -530,37 +569,6 @@ function WeeklyColumns({
   );
 }
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-function buildHRCurve(
-  zoneTime: ZoneTimeEntry[],
-  restingHR: number,
-): {bpm: number}[] {
-  const total = zoneTime.reduce((s, e) => s + e.minutes, 0);
-  if (total === 0) return [];
-
-  const peakZoneId = zoneTime.reduce(
-    (best, e) => (e.minutes > 0 && e.zoneId > best ? e.zoneId : best),
-    0,
-  );
-  const zoneMaxBPMs = [126, 140, 153, 167, 180];
-  const peakBPM = peakZoneId > 0 ? zoneMaxBPMs[peakZoneId - 1] : restingHR + 50;
-
-  return Array.from({length: 24}, (_, h) => {
-    let bpm = restingHR + 10;
-    if (h >= 6 && h < 8) bpm = restingHR + 18;
-    if (h === 9) bpm = restingHR + 35;
-    if (h === 10) bpm = restingHR + 55;
-    if (h === 11) bpm = peakBPM - 10;
-    if (h === 12) bpm = peakBPM;
-    if (h === 13) bpm = peakBPM - 30;
-    if (h === 14) bpm = restingHR + 28;
-    if (h >= 15 && h < 18) bpm = restingHR + 20;
-    if (h === 19) bpm = restingHR + 45;
-    if (h === 20) bpm = restingHR + 22;
-    return {bpm};
-  });
-}
-
 const styles = StyleSheet.create({
   container: {flex: 1, backgroundColor: T.bg.page},
   topBar: {
@@ -637,7 +645,7 @@ const styles = StyleSheet.create({
     lineHeight: 14,
   },
   bpmAxisLabel: {
-    width: 16,
+    width: 32,
     fontSize: 9,
     color: T.text.tertiary,
     textAlign: 'center',

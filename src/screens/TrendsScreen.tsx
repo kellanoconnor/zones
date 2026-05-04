@@ -283,7 +283,7 @@ const TrendsScreen: React.FC = () => {
                   </View>
                 </View>
                 <Text style={[styles.rowNum, {width: 54, color: T.text.secondary}]}>
-                  {week.totalMinutes > 0 ? fmt(week.totalMinutes) : '—'}
+                  {week.totalMinutes > 0 ? Math.round(week.totalMinutes) : '—'}
                 </Text>
                 <Text style={[styles.rowNum, {width: 54, fontWeight: '500'}]}>
                   {week.modVig > 0 ? fmt(week.modVig) : '—'}
@@ -343,7 +343,7 @@ const styles = StyleSheet.create({
   },
   chartUnit: {fontSize: 12, color: T.text.tertiary, fontWeight: '400'},
   minAxisLabel: {
-    width: 16,
+    width: 32,
     fontSize: 9,
     color: T.text.tertiary,
     textAlign: 'center',
