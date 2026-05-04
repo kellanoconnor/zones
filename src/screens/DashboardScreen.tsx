@@ -35,27 +35,29 @@ const SEGMENT_GAP_MS = 5 * 60 * 1000;
 function HRChart({
   samples,
   zoneBoundaries,
+  hourStart,
+  hourEnd,
 }: {
   samples: HeartRateSample[];
   zoneBoundaries: {zoneId: number; lowerTHR: number; upperTHR: number}[];
+  hourStart: number;
+  hourEnd: number;
 }) {
   const W = 300;
   const H = 140;
   const minBPM = 40;
   const maxBPM = 200;
   const yFor = (v: number) => H - ((v - minBPM) / (maxBPM - minBPM)) * H;
-  // X-axis spans 6 AM → 6 PM local time. Workouts outside this window
-  // are dropped from the visual rather than spilling off-canvas.
-  const HOUR_START = 6;
-  const HOUR_END = 18;
-  const HOUR_RANGE = HOUR_END - HOUR_START;
+  // X-axis is parameterised so the parent can shrink the window when no
+  // afternoon data exists. Samples outside the window are dropped.
+  const hourRange = hourEnd - hourStart;
   const xFor = (ts: Date) => {
     const h = ts.getHours() + ts.getMinutes() / 60 + ts.getSeconds() / 3600;
-    return ((h - HOUR_START) / HOUR_RANGE) * W;
+    return ((h - hourStart) / hourRange) * W;
   };
   const inWindow = (ts: Date) => {
     const h = ts.getHours() + ts.getMinutes() / 60;
-    return h >= HOUR_START && h <= HOUR_END;
+    return h >= hourStart && h <= hourEnd;
   };
 
   // Sort + segment by gap so disjoint workouts don't get visually connected.
@@ -273,6 +275,19 @@ const DashboardScreen: React.FC = () => {
       .flatMap(w => w.heartRateSamples);
   }, [workouts, todayData]);
 
+  // Daily HR chart window: default 6a-12p; expand to 6a-6p only if any
+  // sample for the displayed day falls in the afternoon (12p-6p).
+  const dailyHourEnd = hrSamples.some(s => {
+    const h = s.timestamp.getHours();
+    return h >= 12 && h < 18;
+  })
+    ? 18
+    : 12;
+  const dailyXLabels =
+    dailyHourEnd === 18
+      ? ['6a', '9a', '12p', '3p', '6p']
+      : ['6a', '8a', '10a', '12p'];
+
   const weeklyTotals = weeklyData?.weeklyTotals ?? [];
   const zone1Plus = weeklyTotals.reduce((s, e) => s + e.minutes, 0);
   const zone1to2 = weeklyTotals
@@ -356,9 +371,14 @@ const DashboardScreen: React.FC = () => {
 
           {/* HR chart card */}
           <View style={styles.card}>
-            <HRChart samples={hrSamples} zoneBoundaries={boundaries} />
+            <HRChart
+              samples={hrSamples}
+              zoneBoundaries={boundaries}
+              hourStart={6}
+              hourEnd={dailyHourEnd}
+            />
             <View style={styles.xAxisRow}>
-              {['6a', '9a', '12p', '3p', '6p'].map((l, i) => (
+              {dailyXLabels.map((l, i) => (
                 <Text key={i} style={styles.xLabel}>{l}</Text>
               ))}
             </View>
@@ -544,18 +564,18 @@ function WeeklyColumns({
           // can position them with absolute layout. flexDirection
           // column-reverse interacted poorly with the parent's
           // alignItems:center (collapsed width to 0 → nothing rendered).
-          const segments: {zoneId: number; bottom: number; height: number}[] = [];
+          const segments: {zoneId: number; bottom: number; height: number; minutes: number}[] = [];
           let cursor = 0;
           day.zoneTime.forEach(entry => {
             if (entry.minutes <= 0) return;
             const h = (entry.minutes / maxDailyMins) * BAR_H;
-            segments.push({zoneId: entry.zoneId, bottom: cursor, height: h});
+            segments.push({zoneId: entry.zoneId, bottom: cursor, height: h, minutes: entry.minutes});
             cursor += h;
           });
           return (
             <View key={day.date} style={{flex: 1}}>
-              {/* Total label above the bar */}
-              <View style={{height: 14, justifyContent: 'flex-end', alignItems: 'center'}}>
+              {/* Total label above the bar (with breathing room) */}
+              <View style={{height: 14, justifyContent: 'flex-end', alignItems: 'center', marginBottom: 6}}>
                 {day.totalMinutes > 0 && (
                   <Text style={{fontSize: 10, color: T.text.secondary}}>
                     {Math.round(day.totalMinutes)}
@@ -573,7 +593,9 @@ function WeeklyColumns({
                     opacity: 0.4,
                   }} />
                 )}
-                {/* Stacked color-coded zone segments, bottom-up */}
+                {/* Stacked color-coded zone segments, bottom-up. Per-segment
+                    minute label rendered when the segment is tall enough to
+                    fit it (≥ ~14 px for a 9 px font). */}
                 {segments.map(seg => (
                   <View
                     key={seg.zoneId}
@@ -583,8 +605,19 @@ function WeeklyColumns({
                       bottom: seg.bottom,
                       height: seg.height,
                       backgroundColor: zoneColor(seg.zoneId),
-                    }}
-                  />
+                      justifyContent: 'center',
+                      alignItems: 'center',
+                    }}>
+                    {seg.height >= 14 && (
+                      <Text style={{
+                        fontSize: 9,
+                        color: T.bg.page,
+                        fontWeight: '700',
+                      }}>
+                        {Math.round(seg.minutes)}
+                      </Text>
+                    )}
+                  </View>
                 ))}
               </View>
             </View>

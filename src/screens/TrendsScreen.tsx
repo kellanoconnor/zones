@@ -21,7 +21,7 @@ import {getWorkoutsWithHeartRate} from '../services/HealthKitService';
 import {ZoneTimeEntry} from '../types';
 import {T, zoneColor} from '../utils/theme';
 
-const WEEKS_TO_SHOW = 9;
+const WEEKS_TO_SHOW = 8;
 
 interface WeekSummary {
   weekOffset: number;
@@ -193,7 +193,7 @@ const TrendsScreen: React.FC = () => {
       ? Math.round(summaries.reduce((s, w) => s + w.modVig, 0) / summaries.length)
       : 0;
   const bestMV = summaries.length > 0
-    ? Math.max(...summaries.map(w => w.modVig))
+    ? Math.round(Math.max(...summaries.map(w => w.modVig)))
     : 0;
 
   const maxTotal = Math.max(
@@ -291,7 +291,7 @@ const TrendsScreen: React.FC = () => {
                   {week.totalMinutes > 0 ? Math.round(week.totalMinutes) : '—'}
                 </Text>
                 <Text style={[styles.rowNum, {width: 54, fontWeight: '500'}]}>
-                  {week.modVig > 0 ? fmt(week.modVig) : '—'}
+                  {week.modVig > 0 ? Math.round(week.modVig) : '—'}
                 </Text>
               </View>
             ))}
