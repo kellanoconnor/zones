@@ -44,14 +44,25 @@ function HRChart({
   const minBPM = 40;
   const maxBPM = 200;
   const yFor = (v: number) => H - ((v - minBPM) / (maxBPM - minBPM)) * H;
-  // x = fraction of the local-time day (0-24h) → 0..W
-  const xFor = (ts: Date) =>
-    ((ts.getHours() + ts.getMinutes() / 60 + ts.getSeconds() / 3600) / 24) * W;
+  // X-axis spans 6 AM → 6 PM local time. Workouts outside this window
+  // are dropped from the visual rather than spilling off-canvas.
+  const HOUR_START = 6;
+  const HOUR_END = 18;
+  const HOUR_RANGE = HOUR_END - HOUR_START;
+  const xFor = (ts: Date) => {
+    const h = ts.getHours() + ts.getMinutes() / 60 + ts.getSeconds() / 3600;
+    return ((h - HOUR_START) / HOUR_RANGE) * W;
+  };
+  const inWindow = (ts: Date) => {
+    const h = ts.getHours() + ts.getMinutes() / 60;
+    return h >= HOUR_START && h <= HOUR_END;
+  };
 
   // Sort + segment by gap so disjoint workouts don't get visually connected.
+  const windowed = samples.filter(s => inWindow(s.timestamp));
   const segments: HeartRateSample[][] = [];
-  if (samples.length > 0) {
-    const sorted = [...samples].sort(
+  if (windowed.length > 0) {
+    const sorted = [...windowed].sort(
       (a, b) => a.timestamp.getTime() - b.timestamp.getTime(),
     );
     let current: HeartRateSample[] = [sorted[0]];
@@ -264,14 +275,23 @@ const DashboardScreen: React.FC = () => {
 
   const weeklyTotals = weeklyData?.weeklyTotals ?? [];
   const zone1Plus = weeklyTotals.reduce((s, e) => s + e.minutes, 0);
-  const zone3Plus = weeklyTotals.filter(e => e.zoneId >= 3).reduce((s, e) => s + e.minutes, 0);
-  const modVig = zone3Plus;
+  const zone1to2 = weeklyTotals
+    .filter(e => e.zoneId <= 2)
+    .reduce((s, e) => s + e.minutes, 0);
+  const zone3Plus = weeklyTotals
+    .filter(e => e.zoneId >= 3)
+    .reduce((s, e) => s + e.minutes, 0);
+  // MOD + VIG = (Z1+Z2) + 2*(Z3+Z4+Z5) — moderate counts 1×, vigorous 2×.
+  const modVig = zone1to2 + 2 * zone3Plus;
   const maxDailyMins = weeklyData
     ? Math.max(...weeklyData.dailyData.map(d => d.totalMinutes), 1)
     : 1;
-  const maxWeeklyZone = weeklyTotals.length
-    ? Math.max(...weeklyTotals.map(e => e.minutes), 1)
-    : 1;
+  // Per-zone weekly bar: scale to 100 min by default, expand to 150 if any
+  // zone exceeds 100. Anything above the cap saturates the bar.
+  const peakZoneMins = weeklyTotals.length
+    ? Math.max(...weeklyTotals.map(e => e.minutes), 0)
+    : 0;
+  const barScaleMax = peakZoneMins > 100 ? 150 : 100;
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -338,7 +358,7 @@ const DashboardScreen: React.FC = () => {
           <View style={styles.card}>
             <HRChart samples={hrSamples} zoneBoundaries={boundaries} />
             <View style={styles.xAxisRow}>
-              {['12a', '6a', '12p', '6p', '12a'].map((l, i) => (
+              {['6a', '9a', '12p', '3p', '6p'].map((l, i) => (
                 <Text key={i} style={styles.xLabel}>{l}</Text>
               ))}
             </View>
@@ -378,9 +398,9 @@ const DashboardScreen: React.FC = () => {
           {/* ── Weekly V3 ── */}
           <View style={styles.weeklyStats}>
             {[
-              {label: 'Mod+Vig', val: modVig},
               {label: 'Z1+', val: zone1Plus},
               {label: 'Z3+', val: zone3Plus},
+              {label: 'Mod+Vig', val: modVig},
             ].map((s, i) => (
               <React.Fragment key={s.label}>
                 {i > 0 && <View style={styles.statDivider} />}
@@ -422,7 +442,7 @@ const DashboardScreen: React.FC = () => {
           {weeklyTotals.map(entry => {
             const zone = settings.zones.find(z => z.id === entry.zoneId);
             if (!zone) return null;
-            const pct = (entry.minutes / maxWeeklyZone) * 100;
+            const pct = (entry.minutes / barScaleMax) * 100;
             return (
               <View key={entry.zoneId} style={{marginBottom: 14}}>
                 <View style={{flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6, justifyContent: 'space-between'}}>
@@ -434,17 +454,55 @@ const DashboardScreen: React.FC = () => {
                     {entry.minutes > 0 ? fmt(entry.minutes) : '—'}
                   </Text>
                 </View>
-                <View style={{height: 8, backgroundColor: T.bg.track, borderRadius: 4, overflow: 'hidden'}}>
+                <View style={{height: 8, backgroundColor: T.bg.track, borderRadius: 4, overflow: 'hidden', position: 'relative'}}>
                   <View style={{
                     width: `${Math.min(pct, 100)}%`,
                     height: '100%',
                     backgroundColor: zoneColor(entry.zoneId),
                     borderRadius: 4,
                   }} />
+                  {/* 100-min reference tick when bars scale to 150 */}
+                  {barScaleMax > 100 && (
+                    <View style={{
+                      position: 'absolute',
+                      left: `${(100 / barScaleMax) * 100}%`,
+                      top: -2,
+                      bottom: -2,
+                      width: 1,
+                      backgroundColor: T.text.tertiary,
+                    }} />
+                  )}
                 </View>
               </View>
             );
           })}
+          {/* Bar-scale reference label */}
+          {weeklyTotals.length > 0 && (
+            <View style={{height: 18, marginTop: 4, position: 'relative'}}>
+              {barScaleMax > 100 ? (
+                <Text style={{
+                  position: 'absolute',
+                  left: `${(100 / barScaleMax) * 100}%`,
+                  top: 0,
+                  fontSize: 10,
+                  color: T.text.tertiary,
+                  transform: [{translateX: -18}],
+                }}>
+                  100 min
+                </Text>
+              ) : (
+                <Text style={{
+                  position: 'absolute',
+                  right: 0,
+                  top: 0,
+                  fontSize: 10,
+                  color: T.text.tertiary,
+                }}>
+                  100 min
+                </Text>
+              )}
+            </View>
+          )}
         </ScrollView>
       )}
     </SafeAreaView>
@@ -465,69 +523,84 @@ function WeeklyColumns({
 }) {
   return (
     <View>
-      {/* Columns + gridlines */}
-      <View style={{height: BAR_H + 14, flexDirection: 'row', gap: 6, alignItems: 'flex-end', position: 'relative'}}>
-        {/* Gridlines */}
+      {/* Bar row. Gridlines are absolutely-positioned siblings so they
+          span the full row width, behind the bars. */}
+      <View style={{height: BAR_H + 16, flexDirection: 'row', gap: 6, alignItems: 'flex-end', position: 'relative'}}>
         {[0.25, 0.5, 0.75].map(p => (
           <View
             key={p}
             style={{
               position: 'absolute',
               left: 0, right: 0,
-              bottom: 14 + BAR_H * p,
+              bottom: BAR_H * p,
               height: 1,
               backgroundColor: T.bg.line,
             }}
           />
         ))}
 
-        {dailyData.map((day, i) => {
-          const barPixelH = maxDailyMins > 0
-            ? (day.totalMinutes / maxDailyMins) * BAR_H
-            : 0;
+        {dailyData.map(day => {
+          // Pre-compute each segment's pixel height + bottom offset so we
+          // can position them with absolute layout. flexDirection
+          // column-reverse interacted poorly with the parent's
+          // alignItems:center (collapsed width to 0 → nothing rendered).
+          const segments: {zoneId: number; bottom: number; height: number}[] = [];
+          let cursor = 0;
+          day.zoneTime.forEach(entry => {
+            if (entry.minutes <= 0) return;
+            const h = (entry.minutes / maxDailyMins) * BAR_H;
+            segments.push({zoneId: entry.zoneId, bottom: cursor, height: h});
+            cursor += h;
+          });
           return (
-            <View key={day.date} style={{flex: 1, alignItems: 'center', gap: 2}}>
-              {/* Value above bar */}
-              <View style={{height: BAR_H, justifyContent: 'flex-end'}}>
+            <View key={day.date} style={{flex: 1}}>
+              {/* Total label above the bar */}
+              <View style={{height: 14, justifyContent: 'flex-end', alignItems: 'center'}}>
                 {day.totalMinutes > 0 && (
-                  <Text style={{fontSize: 10, color: T.text.secondary, marginBottom: 2, textAlign: 'center'}}>
+                  <Text style={{fontSize: 10, color: T.text.secondary}}>
                     {Math.round(day.totalMinutes)}
                   </Text>
                 )}
-                {/* Bar — empty days show full-height dim track */}
-                <View
-                  style={{
-                    width: '100%',
-                    height: day.totalMinutes === 0 ? BAR_H : Math.max(barPixelH, 4),
-                    borderRadius: 4,
-                    overflow: 'hidden',
-                    backgroundColor: day.totalMinutes === 0 ? T.bg.track : 'transparent',
-                    flexDirection: 'column-reverse',
-                    opacity: day.totalMinutes === 0 ? 0.4 : 1,
-                  }}>
-                  {day.zoneTime.map(entry => {
-                    if (entry.minutes === 0) return null;
-                    const segH = (entry.minutes / maxDailyMins) * BAR_H;
-                    return (
-                      <View
-                        key={entry.zoneId}
-                        style={{
-                          width: '100%',
-                          height: segH,
-                          backgroundColor: zoneColor(entry.zoneId),
-                        }}
-                      />
-                    );
-                  })}
-                </View>
               </View>
-              {/* Day label */}
-              <Text style={{fontSize: 11, color: T.text.tertiary, textAlign: 'center'}}>
-                {DAYS_OF_WEEK[i]?.[0] ?? ''}
-              </Text>
+              {/* Bar container */}
+              <View style={{height: BAR_H, position: 'relative', borderRadius: 4, overflow: 'hidden'}}>
+                {/* Empty-day track */}
+                {day.totalMinutes === 0 && (
+                  <View style={{
+                    position: 'absolute',
+                    left: 0, right: 0, top: 0, bottom: 0,
+                    backgroundColor: T.bg.track,
+                    opacity: 0.4,
+                  }} />
+                )}
+                {/* Stacked color-coded zone segments, bottom-up */}
+                {segments.map(seg => (
+                  <View
+                    key={seg.zoneId}
+                    style={{
+                      position: 'absolute',
+                      left: 0, right: 0,
+                      bottom: seg.bottom,
+                      height: seg.height,
+                      backgroundColor: zoneColor(seg.zoneId),
+                    }}
+                  />
+                ))}
+              </View>
             </View>
           );
         })}
+      </View>
+
+      {/* Day labels under the bars */}
+      <View style={{flexDirection: 'row', gap: 6, marginTop: 4}}>
+        {dailyData.map((day, i) => (
+          <View key={day.date} style={{flex: 1, alignItems: 'center'}}>
+            <Text style={{fontSize: 11, color: T.text.tertiary}}>
+              {DAYS_OF_WEEK[i]?.[0] ?? ''}
+            </Text>
+          </View>
+        ))}
       </View>
 
       {/* Resting HR row */}

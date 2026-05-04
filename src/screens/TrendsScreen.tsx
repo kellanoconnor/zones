@@ -155,9 +155,14 @@ const TrendsScreen: React.FC = () => {
         });
         const totals = aggregateZoneTime(allZoneTimes, settings.zones);
         const totalMinutes = totals.reduce((s, e) => s + e.minutes, 0);
-        const modVig = totals
+        // MOD + VIG = (Z1+Z2) + 2*(Z3+Z4+Z5)
+        const zone1to2 = totals
+          .filter(e => e.zoneId <= 2)
+          .reduce((s, e) => s + e.minutes, 0);
+        const zone3Plus = totals
           .filter(e => e.zoneId >= 3)
           .reduce((s, e) => s + e.minutes, 0);
+        const modVig = zone1to2 + 2 * zone3Plus;
         results.push({
           weekOffset: offset,
           label: formatWeekRange(weekStart, weekEnd),
