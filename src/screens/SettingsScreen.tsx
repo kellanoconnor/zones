@@ -1,4 +1,4 @@
-import React, {useCallback, useState} from 'react';
+import React, {useCallback, useEffect, useState} from 'react';
 import {
   View,
   Text,
@@ -8,6 +8,7 @@ import {
   TouchableOpacity,
   Alert,
 } from 'react-native';
+import {SafeAreaView} from 'react-native-safe-area-context';
 import useStore from '../store/useStore';
 import {calculateTHR, calculateHRR, calculateZoneBoundaries} from '../services/ZoneEngine';
 import {T, zoneColor} from '../utils/theme';
@@ -25,6 +26,18 @@ const SettingsScreen: React.FC = () => {
   } = useStore();
 
   const [editingHR, setEditingHR] = useState(false);
+  // Buffers so partial typing isn't rejected by the range check on each
+  // keystroke. Synced from the store when entering edit mode.
+  const [maxHRText, setMaxHRText] = useState(String(settings.maxHeartRate));
+  const [restingHRText, setRestingHRText] = useState(
+    String(settings.restingHeartRate),
+  );
+  useEffect(() => {
+    if (editingHR) {
+      setMaxHRText(String(settings.maxHeartRate));
+      setRestingHRText(String(settings.restingHeartRate));
+    }
+  }, [editingHR, settings.maxHeartRate, settings.restingHeartRate]);
 
   const hrr = calculateHRR(settings.maxHeartRate, settings.restingHeartRate);
   const boundaries = calculateZoneBoundaries(settings);
@@ -52,6 +65,7 @@ const SettingsScreen: React.FC = () => {
   };
 
   return (
+    <SafeAreaView style={styles.container} edges={['top']}>
     <ScrollView
       style={styles.container}
       showsVerticalScrollIndicator={false}
@@ -68,8 +82,9 @@ const SettingsScreen: React.FC = () => {
             <TextInput
               style={styles.tileInput}
               keyboardType="number-pad"
-              value={String(settings.maxHeartRate)}
+              value={maxHRText}
               onChangeText={v => {
+                setMaxHRText(v);
                 const n = parseNum(v, 100, 250);
                 if (n !== null) setMaxHeartRate(n);
               }}
@@ -88,8 +103,9 @@ const SettingsScreen: React.FC = () => {
             <TextInput
               style={styles.tileInput}
               keyboardType="number-pad"
-              value={String(settings.restingHeartRate)}
+              value={restingHRText}
               onChangeText={v => {
+                setRestingHRText(v);
                 const n = parseNum(v, 30, 120);
                 if (n !== null) setRestingHeartRate(n);
               }}
@@ -227,6 +243,7 @@ const SettingsScreen: React.FC = () => {
         </TouchableOpacity>
       </View>
     </ScrollView>
+    </SafeAreaView>
   );
 };
 

@@ -1,4 +1,4 @@
-import React, {useEffect, useCallback} from 'react';
+import React, {useEffect, useCallback, useMemo} from 'react';
 import {
   View,
   Text,
@@ -8,6 +8,7 @@ import {
   ScrollView,
   Dimensions,
 } from 'react-native';
+import {SafeAreaView} from 'react-native-safe-area-context';
 import Svg, {Path, Line, Rect, Defs, LinearGradient, Stop} from 'react-native-svg';
 import useStore from '../store/useStore';
 import {
@@ -20,7 +21,7 @@ import {
 } from '../services/ZoneEngine';
 import {getWorkoutsWithHeartRate} from '../services/HealthKitService';
 import {DailyZoneData, WeeklyZoneData, ZoneTimeEntry} from '../types';
-import {DAYS_OF_WEEK} from '../utils/constants';
+import {DAYS_OF_WEEK, getLocalDateString} from '../utils/constants';
 import {T, zoneColor} from '../utils/theme';
 
 const SCREEN_W = Dimensions.get('window').width;
@@ -138,9 +139,14 @@ const DashboardScreen: React.FC = () => {
     setIsLoading,
   } = useStore();
 
-  const weekStart = getWeekStart(currentWeekOffset);
-  const weekEnd = getWeekEnd(weekStart);
-  const weekLabel = formatWeekRange(weekStart, weekEnd);
+  // Memoize so the Date refs are stable across renders. Without this,
+  // each render produces new Dates -> useCallback dep change ->
+  // loadWeekData identity churn -> useEffect refires -> infinite spinner.
+  const {weekStart, weekEnd, weekLabel} = useMemo(() => {
+    const ws = getWeekStart(currentWeekOffset);
+    const we = getWeekEnd(ws);
+    return {weekStart: ws, weekEnd: we, weekLabel: formatWeekRange(ws, we)};
+  }, [currentWeekOffset]);
 
   const loadWeekData = useCallback(async () => {
     if (!isHealthKitAuthorized) return;
@@ -152,7 +158,7 @@ const DashboardScreen: React.FC = () => {
       for (let i = 0; i < 7; i++) {
         const day = new Date(weekStart);
         day.setDate(weekStart.getDate() + i);
-        const dateStr = day.toISOString().split('T')[0];
+        const dateStr = getLocalDateString(day);
         dailyMap[dateStr] = {
           date: dateStr,
           zoneTime: settings.zones.map(z => ({zoneId: z.id, minutes: 0})),
@@ -161,7 +167,7 @@ const DashboardScreen: React.FC = () => {
       }
       workouts.forEach(workout => {
         if (workout.heartRateSamples.length === 0) return;
-        const dateStr = workout.startDate.toISOString().split('T')[0];
+        const dateStr = getLocalDateString(workout.startDate);
         if (dailyMap[dateStr]) {
           const zoneTime = calculateZoneTime(
             workout.heartRateSamples,
@@ -185,8 +191,8 @@ const DashboardScreen: React.FC = () => {
         settings.zones,
       );
       setWeeklyData({
-        weekStart: weekStart.toISOString().split('T')[0],
-        weekEnd: weekEnd.toISOString().split('T')[0],
+        weekStart: getLocalDateString(weekStart),
+        weekEnd: getLocalDateString(weekEnd),
         dailyData,
         weeklyTotals,
         totalMinutes: weeklyTotals.reduce((s, e) => s + e.minutes, 0),
@@ -225,7 +231,7 @@ const DashboardScreen: React.FC = () => {
     : 1;
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.topBar}>
         <TouchableOpacity onPress={() => setCurrentWeekOffset(currentWeekOffset - 1)} style={styles.navBtn}>
           <Text style={styles.navChevron}>‹</Text>
@@ -289,8 +295,8 @@ const DashboardScreen: React.FC = () => {
           <View style={styles.card}>
             <HRChart samples={hrSamples} zoneBoundaries={boundaries} />
             <View style={styles.xAxisRow}>
-              {['12a', '6a', '12p', '6p', '12a'].map(l => (
-                <Text key={l} style={styles.xLabel}>{l}</Text>
+              {['12a', '6a', '12p', '6p', '12a'].map((l, i) => (
+                <Text key={i} style={styles.xLabel}>{l}</Text>
               ))}
             </View>
           </View>
@@ -402,7 +408,7 @@ const DashboardScreen: React.FC = () => {
           })}
         </ScrollView>
       )}
-    </View>
+    </SafeAreaView>
   );
 };
 

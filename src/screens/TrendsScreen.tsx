@@ -6,6 +6,7 @@ import {
   ScrollView,
   ActivityIndicator,
 } from 'react-native';
+import {SafeAreaView} from 'react-native-safe-area-context';
 import Svg, {Path, Line, Circle, Defs, LinearGradient, Stop} from 'react-native-svg';
 import useStore from '../store/useStore';
 import {
@@ -196,6 +197,7 @@ const TrendsScreen: React.FC = () => {
   );
 
   return (
+    <SafeAreaView style={styles.container} edges={['top']}>
     <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
       {/* Title */}
       <View style={styles.titleRow}>
@@ -292,6 +294,7 @@ const TrendsScreen: React.FC = () => {
         </>
       )}
     </ScrollView>
+    </SafeAreaView>
   );
 };
 
