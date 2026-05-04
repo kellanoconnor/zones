@@ -89,6 +89,13 @@ echo "▸ Installing $APP_LABEL on device …"
 xcrun devicectl device install app --device "$DEVICECTL_ID" "$APP_PATH"
 
 echo "▸ Launching $APP_LABEL …"
-xcrun devicectl device process launch --device "$DEVICECTL_ID" "$BUNDLE_ID"
+# devicectl exits 0 on launch failures (e.g. phone locked), printing the
+# error to stdout instead — capture and inspect the output ourselves.
+launch_output="$(xcrun devicectl device process launch --device "$DEVICECTL_ID" "$BUNDLE_ID" 2>&1)"
+echo "$launch_output"
+if echo "$launch_output" | grep -qE 'BSErrorCodeDescription|NSLocalizedFailureReason|"error"'; then
+  echo "❌ Launch failed (build is installed; you can tap $APP_LABEL on the phone to open it)." >&2
+  exit 1
+fi
 
 echo "✅ $APP_LABEL is running on your iPhone."
