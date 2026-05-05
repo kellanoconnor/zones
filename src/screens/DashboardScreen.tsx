@@ -232,20 +232,23 @@ const DashboardScreen: React.FC = () => {
           {/* ── Weekly V3 ── */}
           <View style={styles.weeklyStats}>
             {[
-              {label: 'Z1+', val: zone1Plus, raw: false},
-              {label: 'Z3+', val: zone3Plus, raw: false},
-              {label: 'Mod+Vig', val: modVig, raw: true},
+              {label: 'Z1+', val: zone1Plus},
+              {label: 'Z3+', val: zone3Plus},
+              {label: 'Mod+Vig', val: modVig},
             ].map((s, i) => (
               <React.Fragment key={s.label}>
                 {i > 0 && <View style={styles.statDivider} />}
                 <View style={{flex: 1}}>
                   <Text style={styles.sectionLabel}>{s.label}</Text>
                   <Text style={styles.weeklyStatNum}>
-                    {s.val > 0
-                      ? s.raw
-                        ? Math.round(s.val)
-                        : fmt(s.val)
-                      : '—'}
+                    {s.val > 0 ? (
+                      <>
+                        {Math.round(s.val)}
+                        <Text style={styles.weeklyStatUnit}> m</Text>
+                      </>
+                    ) : (
+                      '—'
+                    )}
                   </Text>
                 </View>
               </React.Fragment>
@@ -506,7 +509,7 @@ const styles = StyleSheet.create({
   },
   navBtn: {padding: 8},
   navChevron: {fontSize: 38, color: T.text.secondary, lineHeight: 40, fontWeight: '300'},
-  weekLabel: {fontSize: 22, fontWeight: '600', color: T.text.primary, letterSpacing: -0.3},
+  weekLabel: {fontSize: 19, fontWeight: '400', color: T.text.primary, letterSpacing: -0.2},
   scrollContent: {paddingHorizontal: 16, paddingBottom: 40},
   empty: {flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 40},
   emptyTitle: {color: T.text.secondary, fontSize: 16, textAlign: 'center'},
@@ -546,6 +549,7 @@ const styles = StyleSheet.create({
   },
   statDivider: {width: 1, height: 36, backgroundColor: T.bg.line, marginHorizontal: 12},
   weeklyStatNum: {fontSize: 28, fontWeight: '500', color: T.text.primary, letterSpacing: -0.5, marginTop: 4},
+  weeklyStatUnit: {fontSize: 14, fontWeight: '400', color: T.text.tertiary, letterSpacing: 0},
   zoneLegend: {
     flexDirection: 'row',
     justifyContent: 'center',
