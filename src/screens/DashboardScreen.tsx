@@ -1,4 +1,4 @@
-import React, {useEffect, useCallback, useMemo, useState, useRef} from 'react';
+import React, {useEffect, useCallback, useMemo, useRef} from 'react';
 import {
   View,
   Text,
@@ -6,11 +6,9 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   ScrollView,
-  Dimensions,
   AppState,
 } from 'react-native';
 import {SafeAreaView} from 'react-native-safe-area-context';
-import Svg, {Path, Line, Rect, Defs, LinearGradient, Stop} from 'react-native-svg';
 import useStore from '../store/useStore';
 import {
   getWeekStart,
@@ -21,165 +19,19 @@ import {
   aggregateZoneTime,
 } from '../services/ZoneEngine';
 import {getWorkoutsWithHeartRate, getWakingHeartRate} from '../services/HealthKitService';
-import {DailyZoneData, WeeklyZoneData, ZoneTimeEntry, WorkoutData, HeartRateSample} from '../types';
+import {DailyZoneData} from '../types';
 import {DAYS_OF_WEEK, getLocalDateString} from '../utils/constants';
 import {T, zoneColor} from '../utils/theme';
-
-const SCREEN_W = Dimensions.get('window').width;
-
-// ─── HR chart (Daily V3) ─────────────────────────────────────────────────────
-// Plots real heart-rate samples over a 24-hour x-axis using local time.
-// Samples more than 5 minutes apart start a new path segment so we don't
-// draw a misleading flat line across periods with no data.
-const SEGMENT_GAP_MS = 5 * 60 * 1000;
-
-function HRChart({
-  samples,
-  zoneBoundaries,
-  hourStart,
-  hourEnd,
-}: {
-  samples: HeartRateSample[];
-  zoneBoundaries: {zoneId: number; lowerTHR: number; upperTHR: number}[];
-  hourStart: number;
-  hourEnd: number;
-}) {
-  const W = 300;
-  const H = 140;
-  const minBPM = 40;
-  const maxBPM = 200;
-  const yFor = (v: number) => H - ((v - minBPM) / (maxBPM - minBPM)) * H;
-  // X-axis is parameterised so the parent can shrink the window when no
-  // afternoon data exists. Samples outside the window are dropped.
-  const hourRange = hourEnd - hourStart;
-  const xFor = (ts: Date) => {
-    const h = ts.getHours() + ts.getMinutes() / 60 + ts.getSeconds() / 3600;
-    return ((h - hourStart) / hourRange) * W;
-  };
-  const inWindow = (ts: Date) => {
-    const h = ts.getHours() + ts.getMinutes() / 60;
-    return h >= hourStart && h <= hourEnd;
-  };
-
-  // Sort + segment by gap so disjoint workouts don't get visually connected.
-  const windowed = samples.filter(s => inWindow(s.timestamp));
-  const segments: HeartRateSample[][] = [];
-  if (windowed.length > 0) {
-    const sorted = [...windowed].sort(
-      (a, b) => a.timestamp.getTime() - b.timestamp.getTime(),
-    );
-    let current: HeartRateSample[] = [sorted[0]];
-    for (let i = 1; i < sorted.length; i++) {
-      const gap = sorted[i].timestamp.getTime() - sorted[i - 1].timestamp.getTime();
-      if (gap > SEGMENT_GAP_MS) {
-        if (current.length > 0) segments.push(current);
-        current = [];
-      }
-      current.push(sorted[i]);
-    }
-    if (current.length > 0) segments.push(current);
-  }
-
-  const segmentPaths = segments
-    .filter(seg => seg.length > 1)
-    .map(seg => {
-      let d = `M ${xFor(seg[0].timestamp)} ${yFor(seg[0].bpm)}`;
-      for (let i = 1; i < seg.length; i++) {
-        const x0 = xFor(seg[i - 1].timestamp);
-        const y0 = yFor(seg[i - 1].bpm);
-        const x1 = xFor(seg[i].timestamp);
-        const y1 = yFor(seg[i].bpm);
-        const cx = (x0 + x1) / 2;
-        d += ` C ${cx} ${y0}, ${cx} ${y1}, ${x1} ${y1}`;
-      }
-      const firstX = xFor(seg[0].timestamp);
-      const lastX = xFor(seg[seg.length - 1].timestamp);
-      const fill = d + ` L ${lastX} ${H} L ${firstX} ${H} Z`;
-      return {d, fill};
-    });
-
-  const yLabels = [180, 150, 120, 90, 60];
-
-  return (
-    <View style={{flexDirection: 'row'}}>
-      {/* Y-axis */}
-      <View style={{width: 26, height: H, position: 'relative'}}>
-        {yLabels.map(bpm => (
-          <Text
-            key={bpm}
-            style={[styles.yLabel, {top: yFor(bpm) - 7}]}>
-            {bpm}
-          </Text>
-        ))}
-      </View>
-
-      {/* SVG chart area */}
-      <View style={{flex: 1}}>
-        <Svg
-          width="100%"
-          height={H}
-          viewBox={`0 0 ${W} ${H}`}
-          preserveAspectRatio="none">
-          <Defs>
-            <LinearGradient id="hrFill" x1="0" x2="0" y1="0" y2="1">
-              <Stop offset="0%" stopColor={T.accent} stopOpacity="0.28" />
-              <Stop offset="100%" stopColor={T.accent} stopOpacity="0" />
-            </LinearGradient>
-          </Defs>
-          {zoneBoundaries.map(b => (
-            <Rect
-              key={b.zoneId}
-              x={0}
-              y={yFor(b.upperTHR)}
-              width={W}
-              height={Math.max(0, yFor(b.lowerTHR) - yFor(b.upperTHR))}
-              fill={zoneColor(b.zoneId)}
-              opacity={0.07}
-            />
-          ))}
-          {yLabels.map(bpm => (
-            <Line
-              key={bpm}
-              x1={0} x2={W}
-              y1={yFor(bpm)} y2={yFor(bpm)}
-              stroke={T.bg.line}
-              strokeWidth="1"
-            />
-          ))}
-          {segmentPaths.map((seg, i) => (
-            <Path key={`fill-${i}`} d={seg.fill} fill="url(#hrFill)" />
-          ))}
-          {segmentPaths.map((seg, i) => (
-            <Path
-              key={`stroke-${i}`}
-              d={seg.d}
-              fill="none"
-              stroke={T.accent}
-              strokeWidth="1.5"
-              strokeLinejoin="round"
-              vectorEffect="non-scaling-stroke"
-            />
-          ))}
-        </Svg>
-      </View>
-
-      {/* BPM label rotated */}
-      <Text style={styles.bpmAxisLabel}>BPM</Text>
-    </View>
-  );
-}
 
 // ─── Main component ──────────────────────────────────────────────────────────
 const DashboardScreen: React.FC = () => {
   const {
     settings,
     currentWeekOffset,
-    viewMode,
     weeklyData,
     isLoading,
     isHealthKitAuthorized,
     setCurrentWeekOffset,
-    setViewMode,
     setWeeklyData,
     setIsLoading,
     setTodayRestingHR,
@@ -188,10 +40,6 @@ const DashboardScreen: React.FC = () => {
     saveRestingHRHistory,
     loadRestingHRHistory,
   } = useStore();
-
-  // Raw workouts kept locally so the Daily HR chart can plot real samples
-  // by their actual timestamps. weeklyData drops them after aggregation.
-  const [workouts, setWorkouts] = useState<WorkoutData[]>([]);
 
   // Memoize so the Date refs are stable across renders. Without this,
   // each render produces new Dates -> useCallback dep change ->
@@ -246,7 +94,6 @@ const DashboardScreen: React.FC = () => {
     setIsLoading(true);
     try {
       const fetched = await getWorkoutsWithHeartRate(weekStart, weekEnd);
-      setWorkouts(fetched);
       const dailyMap: Record<string, DailyZoneData> = {};
       for (let i = 0; i < 7; i++) {
         const day = new Date(weekStart);
@@ -335,43 +182,6 @@ const DashboardScreen: React.FC = () => {
     return h > 0 ? `${h}h ${m}m` : `${m}m`;
   };
 
-  const boundaries = calculateZoneBoundaries(settings);
-  // For the current week, the Daily view always defaults to today (even
-  // if 0 minutes). For past weeks, fall back to the most recent day with
-  // workout data so the chart isn't blank.
-  const todayData = (() => {
-    if (!weeklyData) return null;
-    if (currentWeekOffset === 0) {
-      const todayStr = getLocalDateString();
-      const today = weeklyData.dailyData.find(d => d.date === todayStr);
-      if (today) return today;
-    }
-    const reversed = [...weeklyData.dailyData].reverse();
-    return reversed.find(d => d.totalMinutes > 0) ?? reversed[0] ?? null;
-  })();
-  const totalToday = todayData?.totalMinutes ?? 0;
-  // Real heart-rate samples for the displayed day, plotted by local-time
-  // timestamp by HRChart.
-  const hrSamples = useMemo<HeartRateSample[]>(() => {
-    if (!todayData) return [];
-    return workouts
-      .filter(w => getLocalDateString(w.startDate) === todayData.date)
-      .flatMap(w => w.heartRateSamples);
-  }, [workouts, todayData]);
-
-  // Daily HR chart window: default 6a-12p; expand to 6a-6p only if any
-  // sample for the displayed day falls in the afternoon (12p-6p).
-  const dailyHourEnd = hrSamples.some(s => {
-    const h = s.timestamp.getHours();
-    return h >= 12 && h < 18;
-  })
-    ? 18
-    : 12;
-  const dailyXLabels =
-    dailyHourEnd === 18
-      ? ['6a', '9a', '12p', '3p', '6p']
-      : ['6a', '8a', '10a', '12p'];
-
   const weeklyTotals = weeklyData?.weeklyTotals ?? [];
   const zone1Plus = weeklyTotals.reduce((s, e) => s + e.minutes, 0);
   const zone1to2 = weeklyTotals
@@ -398,30 +208,10 @@ const DashboardScreen: React.FC = () => {
         <TouchableOpacity onPress={() => setCurrentWeekOffset(currentWeekOffset - 1)} style={styles.navBtn}>
           <Text style={styles.navChevron}>‹</Text>
         </TouchableOpacity>
-        <Text style={styles.weekLabel}>
-          {viewMode === 'daily' && todayData
-            ? new Date(todayData.date + 'T00:00:00').toLocaleDateString(
-                undefined,
-                {weekday: 'short', month: 'short', day: 'numeric'},
-              )
-            : weekLabel}
-        </Text>
+        <Text style={styles.weekLabel}>{weekLabel}</Text>
         <TouchableOpacity onPress={() => setCurrentWeekOffset(currentWeekOffset + 1)} style={styles.navBtn}>
           <Text style={styles.navChevron}>›</Text>
         </TouchableOpacity>
-      </View>
-
-      <View style={styles.segmented}>
-        {(['daily', 'weekly'] as const).map(mode => (
-          <TouchableOpacity
-            key={mode}
-            style={[styles.segBtn, viewMode === mode && styles.segBtnActive]}
-            onPress={() => setViewMode(mode)}>
-            <Text style={[styles.segText, viewMode === mode && styles.segTextActive]}>
-              {mode === 'daily' ? 'Daily' : 'Weekly'}
-            </Text>
-          </TouchableOpacity>
-        ))}
       </View>
 
       {isLoading ? (
@@ -435,75 +225,6 @@ const DashboardScreen: React.FC = () => {
         <View style={styles.empty}>
           <Text style={styles.emptyTitle}>No workout data this week</Text>
         </View>
-      ) : viewMode === 'daily' ? (
-        <ScrollView
-          contentContainerStyle={styles.scrollContent}
-          showsVerticalScrollIndicator={false}>
-          {/* ── Daily V3 ── */}
-          <View style={styles.dailyHeader}>
-            <View>
-              <Text style={styles.sectionLabel}>Heart Rate</Text>
-              <View style={{flexDirection: 'row', alignItems: 'baseline', gap: 6, marginTop: 4}}>
-                <Text style={styles.heroNum}>
-                  {hrSamples.length ? Math.max(...hrSamples.map(s => s.bpm)) : '–'}
-                </Text>
-                <Text style={styles.heroUnit}>peak bpm</Text>
-              </View>
-            </View>
-            <View style={{alignItems: 'center'}}>
-              <Text style={styles.accentStat}>
-                {todayData?.restingHR ?? settings.restingHeartRate}
-              </Text>
-              <Text style={styles.smallLabel}>resting</Text>
-            </View>
-            <View style={{alignItems: 'flex-end'}}>
-              <Text style={styles.rightStat}>{totalToday > 0 ? fmt(totalToday) : '–'}</Text>
-              <Text style={styles.smallLabel}>in zone</Text>
-            </View>
-          </View>
-
-          {/* HR chart card */}
-          <View style={styles.card}>
-            <HRChart
-              samples={hrSamples}
-              zoneBoundaries={boundaries}
-              hourStart={6}
-              hourEnd={dailyHourEnd}
-            />
-            <View style={styles.xAxisRow}>
-              {dailyXLabels.map((l, i) => (
-                <Text key={i} style={styles.xLabel}>{l}</Text>
-              ))}
-            </View>
-          </View>
-
-          {/* Zone tile grid: 5 zones + Total in a 2-col layout */}
-          <View style={styles.zoneGrid}>
-            {settings.zones.map(zone => {
-              const mins = todayData?.zoneTime.find(e => e.zoneId === zone.id)?.minutes ?? 0;
-              return (
-                <View key={zone.id} style={styles.zoneTile}>
-                  <View style={[styles.dot, {backgroundColor: zoneColor(zone.id)}]} />
-                  <View>
-                    <Text style={styles.zoneTileLabel}>ZONE {zone.id}</Text>
-                    <Text style={[styles.zoneTileNum, {color: mins > 0 ? T.text.primary : T.text.tertiary}]}>
-                      {mins > 0 ? fmt(mins) : '—'}
-                    </Text>
-                  </View>
-                </View>
-              );
-            })}
-            <View style={styles.zoneTile}>
-              <View style={[styles.dot, {backgroundColor: T.accent}]} />
-              <View>
-                <Text style={styles.zoneTileLabel}>TOTAL</Text>
-                <Text style={[styles.zoneTileNum, {color: totalToday > 0 ? T.text.primary : T.text.tertiary}]}>
-                  {totalToday > 0 ? fmt(totalToday) : '—'}
-                </Text>
-              </View>
-            </View>
-          </View>
-        </ScrollView>
       ) : (
         <ScrollView
           contentContainerStyle={styles.scrollContent}
@@ -780,39 +501,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 20,
-    paddingTop: 16,
-    paddingBottom: 10,
+    paddingTop: 12,
+    paddingBottom: 18,
   },
-  navBtn: {padding: 6},
-  navChevron: {fontSize: 28, color: T.text.tertiary, lineHeight: 30},
-  weekLabel: {fontSize: 15, fontWeight: '500', color: T.text.primary, letterSpacing: -0.1},
-  segmented: {
-    flexDirection: 'row',
-    marginHorizontal: 16,
-    marginBottom: 12,
-    padding: 3,
-    backgroundColor: T.bg.card,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: T.bg.line,
-  },
-  segBtn: {flex: 1, paddingVertical: 9, borderRadius: 8, alignItems: 'center'},
-  segBtnActive: {backgroundColor: T.bg.cardHi},
-  segText: {fontSize: 14, fontWeight: '500', color: T.text.secondary},
-  segTextActive: {color: T.text.primary, fontWeight: '600'},
+  navBtn: {padding: 8},
+  navChevron: {fontSize: 38, color: T.text.secondary, lineHeight: 40, fontWeight: '300'},
+  weekLabel: {fontSize: 22, fontWeight: '600', color: T.text.primary, letterSpacing: -0.3},
   scrollContent: {paddingHorizontal: 16, paddingBottom: 40},
   empty: {flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 40},
   emptyTitle: {color: T.text.secondary, fontSize: 16, textAlign: 'center'},
   emptyBody: {color: T.text.tertiary, fontSize: 14, textAlign: 'center', marginTop: 6},
 
-  // Daily header
-  dailyHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-end',
-    marginBottom: 12,
-    marginTop: 4,
-  },
   sectionLabel: {
     fontSize: 11,
     color: T.text.tertiary,
@@ -820,13 +519,8 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
     textTransform: 'uppercase',
   },
-  heroNum: {fontSize: 36, fontWeight: '600', color: T.text.primary, letterSpacing: -1},
-  heroUnit: {fontSize: 13, color: T.text.tertiary},
-  accentStat: {fontSize: 20, fontWeight: '600', color: T.accent},
-  rightStat: {fontSize: 20, fontWeight: '600', color: T.text.primary},
-  smallLabel: {fontSize: 11, color: T.text.tertiary, marginTop: 2},
 
-  // Chart card
+  // Card (used for the day-by-day chart)
   card: {
     backgroundColor: T.bg.card,
     borderRadius: 14,
@@ -841,47 +535,7 @@ const styles = StyleSheet.create({
     alignItems: 'baseline',
     marginBottom: 12,
   },
-  yLabel: {
-    position: 'absolute',
-    right: 2,
-    fontSize: 9,
-    color: T.text.tertiary,
-    lineHeight: 14,
-  },
-  bpmAxisLabel: {
-    width: 32,
-    fontSize: 9,
-    color: T.text.tertiary,
-    textAlign: 'center',
-    alignSelf: 'center',
-    letterSpacing: 1,
-    transform: [{rotate: '-90deg'}],
-  },
-  xAxisRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginTop: 6,
-    paddingLeft: 26,
-    paddingRight: 18,
-  },
-  xLabel: {fontSize: 10, color: T.text.tertiary},
-
-  // Zone grid
-  zoneGrid: {flexDirection: 'row', flexWrap: 'wrap', gap: 8},
-  zoneTile: {
-    width: '47.5%',
-    backgroundColor: T.bg.card,
-    borderRadius: 10,
-    padding: 12,
-    borderWidth: 1,
-    borderColor: T.bg.line,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
   dot: {width: 10, height: 10, borderRadius: 5, flexShrink: 0},
-  zoneTileLabel: {fontSize: 11, color: T.text.tertiary, letterSpacing: 0.3},
-  zoneTileNum: {fontSize: 18, fontWeight: '600', color: T.text.primary, marginTop: 2},
 
   // Weekly stats header
   weeklyStats: {
