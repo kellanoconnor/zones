@@ -1,4 +1,4 @@
-import React, {useEffect, useCallback, useMemo, useState} from 'react';
+import React, {useEffect, useCallback, useMemo, useState, useRef} from 'react';
 import {
   View,
   Text,
@@ -7,6 +7,7 @@ import {
   ActivityIndicator,
   ScrollView,
   Dimensions,
+  AppState,
 } from 'react-native';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import Svg, {Path, Line, Rect, Defs, LinearGradient, Stop} from 'react-native-svg';
@@ -19,7 +20,7 @@ import {
   calculateZoneTime,
   aggregateZoneTime,
 } from '../services/ZoneEngine';
-import {getWorkoutsWithHeartRate} from '../services/HealthKitService';
+import {getWorkoutsWithHeartRate, getWakingHeartRate} from '../services/HealthKitService';
 import {DailyZoneData, WeeklyZoneData, ZoneTimeEntry, WorkoutData, HeartRateSample} from '../types';
 import {DAYS_OF_WEEK, getLocalDateString} from '../utils/constants';
 import {T, zoneColor} from '../utils/theme';
@@ -181,6 +182,11 @@ const DashboardScreen: React.FC = () => {
     setViewMode,
     setWeeklyData,
     setIsLoading,
+    setTodayRestingHR,
+    setDailyRestingHR,
+    getRestingHRForDate,
+    saveRestingHRHistory,
+    loadRestingHRHistory,
   } = useStore();
 
   // Raw workouts kept locally so the Daily HR chart can plot real samples
@@ -196,11 +202,49 @@ const DashboardScreen: React.FC = () => {
     return {weekStart: ws, weekEnd: we, weekLabel: formatWeekRange(ws, we)};
   }, [currentWeekOffset]);
 
+  // Fetch today's waking HR and backfill any unlocked past 6 days. The
+  // store's setTodayRestingHR also pushes the value into settings, which
+  // re-triggers loadWeekData with up-to-date zone boundaries.
+  const fetchWakingHR = useCallback(async () => {
+    if (!isHealthKitAuthorized) return;
+    try {
+      await loadRestingHRHistory();
+      const today = new Date();
+      const todayStr = getLocalDateString(today);
+      const {restingHRHistory} = useStore.getState();
+      const lockedDates = new Set(
+        restingHRHistory.filter(d => d.locked).map(d => d.date),
+      );
+      for (let i = 6; i >= 1; i--) {
+        const pastDate = new Date(today);
+        pastDate.setDate(today.getDate() - i);
+        const pastDateStr = getLocalDateString(pastDate);
+        if (!lockedDates.has(pastDateStr)) {
+          const pastWakingHR = await getWakingHeartRate(pastDate);
+          if (pastWakingHR !== null) setDailyRestingHR(pastDateStr, pastWakingHR);
+        }
+      }
+      const wakingHR = await getWakingHeartRate(today);
+      if (wakingHR !== null) {
+        setTodayRestingHR(wakingHR);
+        setDailyRestingHR(todayStr, wakingHR);
+      }
+      await saveRestingHRHistory();
+    } catch (e) {
+      console.error('Failed to fetch waking HR:', e);
+    }
+    // Store actions are stable refs; only auth gates the work.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isHealthKitAuthorized]);
+
+  useEffect(() => {
+    fetchWakingHR();
+  }, [fetchWakingHR]);
+
   const loadWeekData = useCallback(async () => {
     if (!isHealthKitAuthorized) return;
     setIsLoading(true);
     try {
-      const boundaries = calculateZoneBoundaries(settings);
       const fetched = await getWorkoutsWithHeartRate(weekStart, weekEnd);
       setWorkouts(fetched);
       const dailyMap: Record<string, DailyZoneData> = {};
@@ -212,15 +256,24 @@ const DashboardScreen: React.FC = () => {
           date: dateStr,
           zoneTime: settings.zones.map(z => ({zoneId: z.id, minutes: 0})),
           totalMinutes: 0,
+          restingHR: getRestingHRForDate(dateStr),
         };
       }
       fetched.forEach(workout => {
         if (workout.heartRateSamples.length === 0) return;
         const dateStr = getLocalDateString(workout.startDate);
         if (dailyMap[dateStr]) {
+          // Use this day's resting HR for accurate zone boundaries on
+          // historical workouts (resting HR varies day to day).
+          const dayRestingHR =
+            dailyMap[dateStr].restingHR ?? settings.restingHeartRate;
+          const dayBoundaries = calculateZoneBoundaries({
+            ...settings,
+            restingHeartRate: dayRestingHR,
+          });
           const zoneTime = calculateZoneTime(
             workout.heartRateSamples,
-            boundaries,
+            dayBoundaries,
             settings.zones,
           );
           zoneTime.forEach(entry => {
@@ -251,9 +304,29 @@ const DashboardScreen: React.FC = () => {
     } finally {
       setIsLoading(false);
     }
-  }, [currentWeekOffset, settings, isHealthKitAuthorized, setIsLoading, setWeeklyData, weekStart, weekEnd]);
+    // Zustand actions + getRestingHRForDate are stable references; deps
+    // intentionally omit them.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentWeekOffset, settings, isHealthKitAuthorized, weekStart, weekEnd]);
 
   useEffect(() => { loadWeekData(); }, [loadWeekData]);
+
+  // Refresh on app foreground so a workout that finished while the app
+  // was backgrounded shows up without a manual reload.
+  const appStateRef = useRef(AppState.currentState);
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', next => {
+      if (
+        appStateRef.current.match(/inactive|background/) &&
+        next === 'active'
+      ) {
+        fetchWakingHR();
+        loadWeekData();
+      }
+      appStateRef.current = next;
+    });
+    return () => sub.remove();
+  }, [fetchWakingHR, loadWeekData]);
 
   const fmt = (mins: number): string => {
     if (mins < 1) return `${Math.round(mins * 60)}s`;
@@ -263,8 +336,19 @@ const DashboardScreen: React.FC = () => {
   };
 
   const boundaries = calculateZoneBoundaries(settings);
-  const todayData = weeklyData?.dailyData.find(d => d.totalMinutes > 0) ??
-    weeklyData?.dailyData[0] ?? null;
+  // For the current week, the Daily view always defaults to today (even
+  // if 0 minutes). For past weeks, fall back to the most recent day with
+  // workout data so the chart isn't blank.
+  const todayData = (() => {
+    if (!weeklyData) return null;
+    if (currentWeekOffset === 0) {
+      const todayStr = getLocalDateString();
+      const today = weeklyData.dailyData.find(d => d.date === todayStr);
+      if (today) return today;
+    }
+    const reversed = [...weeklyData.dailyData].reverse();
+    return reversed.find(d => d.totalMinutes > 0) ?? reversed[0] ?? null;
+  })();
   const totalToday = todayData?.totalMinutes ?? 0;
   // Real heart-rate samples for the displayed day, plotted by local-time
   // timestamp by HRChart.
@@ -360,7 +444,9 @@ const DashboardScreen: React.FC = () => {
               </View>
             </View>
             <View style={{alignItems: 'center'}}>
-              <Text style={styles.accentStat}>{settings.restingHeartRate}</Text>
+              <Text style={styles.accentStat}>
+                {todayData?.restingHR ?? settings.restingHeartRate}
+              </Text>
               <Text style={styles.smallLabel}>resting</Text>
             </View>
             <View style={{alignItems: 'flex-end'}}>
@@ -443,7 +529,7 @@ const DashboardScreen: React.FC = () => {
             <WeeklyColumns
               dailyData={weeklyData.dailyData}
               maxDailyMins={maxDailyMins}
-              restingHR={settings.restingHeartRate}
+              fallbackRestingHR={settings.restingHeartRate}
             />
           </View>
 
@@ -535,11 +621,11 @@ const BAR_H = 160;
 function WeeklyColumns({
   dailyData,
   maxDailyMins,
-  restingHR,
+  fallbackRestingHR,
 }: {
   dailyData: DailyZoneData[];
   maxDailyMins: number;
-  restingHR: number;
+  fallbackRestingHR: number;
 }) {
   return (
     <View>
@@ -645,8 +731,9 @@ function WeeklyColumns({
         borderTopWidth: 1,
         borderTopColor: T.bg.line,
       }}>
-        {dailyData.map((day, i) => {
+        {dailyData.map(day => {
           const show = day.totalMinutes > 0;
+          const hr = day.restingHR ?? fallbackRestingHR;
           return (
             <View key={day.date} style={{flex: 1, alignItems: 'center'}}>
               <Text style={{
@@ -654,7 +741,7 @@ function WeeklyColumns({
                 fontWeight: '600',
                 color: show ? T.accent : T.text.quat,
               }}>
-                {show ? restingHR : '–'}
+                {show ? hr : '–'}
               </Text>
             </View>
           );
