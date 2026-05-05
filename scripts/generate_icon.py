@@ -1,23 +1,25 @@
 #!/usr/bin/env python3
 """
 Generate the Karvo app icon.
-Design: White background with 5 colored bars (zone colors)
-stacked and staggered upward from bottom-left to top-right.
+Design: Dark-navy background (T.bg.page) with 5 muted zone-color bars
+stacked and staggered upward from bottom-left to top-right. Palette
+matches src/utils/theme.ts so the icon reads as part of the same app.
 """
 
 from PIL import Image, ImageDraw
 import json
 import os
 
+# Muted zone palette from src/utils/theme.ts
 ZONE_COLORS = [
-    (59, 130, 246),   # Zone 1 - Blue (bottom)
-    (34, 197, 94),    # Zone 2 - Green
-    (234, 179, 8),    # Zone 3 - Yellow
-    (249, 115, 22),   # Zone 4 - Orange
-    (239, 68, 68),    # Zone 5 - Red (top)
+    (107, 157, 217),  # Zone 1 - slate blue   #6B9DD9 (bottom)
+    (107, 194, 142),  # Zone 2 - sage green   #6BC28E
+    (217, 180, 94),   # Zone 3 - warm gold    #D9B45E
+    (217, 139, 94),   # Zone 4 - terracotta   #D98B5E
+    (217, 110, 122),  # Zone 5 - dusty rose   #D96E7A (top)
 ]
 
-BG_COLOR = (255, 255, 255)
+BG_COLOR = (10, 13, 18)  # T.bg.page #0A0D12
 
 
 def generate_icon(size=1024):
