@@ -202,38 +202,7 @@ const SettingsScreen: React.FC = () => {
         })}
       </View>
 
-      {/* ── Weekly Goals ── */}
-      <Text style={styles.sectionLabel}>Weekly Goals</Text>
-      <View style={styles.ladderCard}>
-        {settings.zones.map((zone, i) => {
-          const isLast = i === settings.zones.length - 1;
-          return (
-            <View
-              key={zone.id}
-              style={[styles.intensityRow, !isLast && styles.ladderRowBorder]}>
-              <View style={[styles.dot, {backgroundColor: zoneColor(zone.id)}]} />
-              <Text style={styles.intensityZoneName}>{ZONE_NAMES[zone.id - 1]}</Text>
-              <View style={styles.intensityInputs}>
-                <TextInput
-                  style={styles.pctInput}
-                  keyboardType="number-pad"
-                  value={zone.goalMinutes ? String(zone.goalMinutes) : ''}
-                  onChangeText={v => {
-                    const n = parseInt(v, 10);
-                    updateZone(zone.id, {goalMinutes: isNaN(n) ? undefined : n});
-                  }}
-                  placeholder="—"
-                  placeholderTextColor={T.text.tertiary}
-                  selectTextOnFocus
-                />
-                <Text style={styles.pctUnit}>min</Text>
-              </View>
-            </View>
-          );
-        })}
-      </View>
-
-      {/* ── Actions ── */}
+{/* ── Actions ── */}
       <View style={styles.actions}>
         <TouchableOpacity style={styles.saveBtn} onPress={handleSave}>
           <Text style={styles.saveBtnText}>Save Settings</Text>

@@ -398,7 +398,14 @@ const DashboardScreen: React.FC = () => {
         <TouchableOpacity onPress={() => setCurrentWeekOffset(currentWeekOffset - 1)} style={styles.navBtn}>
           <Text style={styles.navChevron}>‹</Text>
         </TouchableOpacity>
-        <Text style={styles.weekLabel}>{weekLabel}</Text>
+        <Text style={styles.weekLabel}>
+          {viewMode === 'daily' && todayData
+            ? new Date(todayData.date + 'T00:00:00').toLocaleDateString(
+                undefined,
+                {weekday: 'short', month: 'short', day: 'numeric'},
+              )
+            : weekLabel}
+        </Text>
         <TouchableOpacity onPress={() => setCurrentWeekOffset(currentWeekOffset + 1)} style={styles.navBtn}>
           <Text style={styles.navChevron}>›</Text>
         </TouchableOpacity>
@@ -504,16 +511,20 @@ const DashboardScreen: React.FC = () => {
           {/* ── Weekly V3 ── */}
           <View style={styles.weeklyStats}>
             {[
-              {label: 'Z1+', val: zone1Plus},
-              {label: 'Z3+', val: zone3Plus},
-              {label: 'Mod+Vig', val: modVig},
+              {label: 'Z1+', val: zone1Plus, raw: false},
+              {label: 'Z3+', val: zone3Plus, raw: false},
+              {label: 'Mod+Vig', val: modVig, raw: true},
             ].map((s, i) => (
               <React.Fragment key={s.label}>
                 {i > 0 && <View style={styles.statDivider} />}
                 <View style={{flex: 1}}>
                   <Text style={styles.sectionLabel}>{s.label}</Text>
                   <Text style={styles.weeklyStatNum}>
-                    {s.val > 0 ? fmt(s.val) : '—'}
+                    {s.val > 0
+                      ? s.raw
+                        ? Math.round(s.val)
+                        : fmt(s.val)
+                      : '—'}
                   </Text>
                 </View>
               </React.Fragment>
