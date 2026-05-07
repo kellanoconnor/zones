@@ -52,6 +52,19 @@ export interface DailyRestingHR {
   locked: boolean; // Once a day is complete, this is locked
 }
 
+// A snapshot of all settings that influence zone boundaries on a given
+// day. Created lazily the first time a date is looked up; locked once
+// date < today. Past zone calculations read from the saved snapshot
+// instead of recomputing with current settings, so changes to max HR
+// or zone intensity bounds never reshape historical data.
+export interface DailySettingsSnapshot {
+  date: string; // YYYY-MM-DD
+  restingHR: number;
+  maxHeartRate: number;
+  zones: Zone[];
+  locked: boolean;
+}
+
 export interface WeeklyZoneData {
   weekStart: string; // ISO date string for Sunday
   weekEnd: string; // ISO date string for Saturday

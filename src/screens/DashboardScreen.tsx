@@ -36,9 +36,10 @@ const DashboardScreen: React.FC = () => {
     setIsLoading,
     setTodayRestingHR,
     setDailyRestingHR,
-    getRestingHRForDate,
     saveRestingHRHistory,
     loadRestingHRHistory,
+    loadSettingsSnapshots,
+    getSettingsSnapshotForDate,
   } = useStore();
 
   // Memoize so the Date refs are stable across renders. Without this,
@@ -93,35 +94,43 @@ const DashboardScreen: React.FC = () => {
     if (!isHealthKitAuthorized) return;
     setIsLoading(true);
     try {
+      // Make sure persisted snapshots are loaded before any per-day
+      // lookups; otherwise the first lookup on app start would build
+      // and lock new snapshots that already existed on disk.
+      await loadSettingsSnapshots();
       const fetched = await getWorkoutsWithHeartRate(weekStart, weekEnd);
       const dailyMap: Record<string, DailyZoneData> = {};
+      // Build per-day snapshots up front so each day uses its own
+      // locked-in resting HR / max HR / zone bounds — independent of
+      // current settings.
+      const snapshotByDate: Record<string, ReturnType<typeof getSettingsSnapshotForDate>> = {};
       for (let i = 0; i < 7; i++) {
         const day = new Date(weekStart);
         day.setDate(weekStart.getDate() + i);
         const dateStr = getLocalDateString(day);
+        const snap = getSettingsSnapshotForDate(dateStr);
+        snapshotByDate[dateStr] = snap;
         dailyMap[dateStr] = {
           date: dateStr,
-          zoneTime: settings.zones.map(z => ({zoneId: z.id, minutes: 0})),
+          zoneTime: snap.zones.map(z => ({zoneId: z.id, minutes: 0})),
           totalMinutes: 0,
-          restingHR: getRestingHRForDate(dateStr),
+          restingHR: snap.restingHR,
         };
       }
       fetched.forEach(workout => {
         if (workout.heartRateSamples.length === 0) return;
         const dateStr = getLocalDateString(workout.startDate);
-        if (dailyMap[dateStr]) {
-          // Use this day's resting HR for accurate zone boundaries on
-          // historical workouts (resting HR varies day to day).
-          const dayRestingHR =
-            dailyMap[dateStr].restingHR ?? settings.restingHeartRate;
+        const snap = snapshotByDate[dateStr];
+        if (dailyMap[dateStr] && snap) {
           const dayBoundaries = calculateZoneBoundaries({
-            ...settings,
-            restingHeartRate: dayRestingHR,
+            maxHeartRate: snap.maxHeartRate,
+            restingHeartRate: snap.restingHR,
+            zones: snap.zones,
           });
           const zoneTime = calculateZoneTime(
             workout.heartRateSamples,
             dayBoundaries,
-            settings.zones,
+            snap.zones,
           );
           zoneTime.forEach(entry => {
             const ex = dailyMap[dateStr].zoneTime.find(e => e.zoneId === entry.zoneId);
@@ -151,8 +160,7 @@ const DashboardScreen: React.FC = () => {
     } finally {
       setIsLoading(false);
     }
-    // Zustand actions + getRestingHRForDate are stable references; deps
-    // intentionally omit them.
+    // Zustand actions are stable references; deps intentionally omit them.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentWeekOffset, settings, isHealthKitAuthorized, weekStart, weekEnd]);
 

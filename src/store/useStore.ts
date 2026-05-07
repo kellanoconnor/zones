@@ -1,6 +1,6 @@
 import {create} from 'zustand';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import {Zone, ZoneSettings, WeeklyZoneData, ViewMode, DailyRestingHR} from '../types';
+import {Zone, ZoneSettings, WeeklyZoneData, ViewMode, DailyRestingHR, DailySettingsSnapshot} from '../types';
 import {
   DEFAULT_ZONES,
   DEFAULT_MAX_HR,
@@ -11,6 +11,7 @@ import {
 const SETTINGS_KEY = '@zones_settings';
 const GOALS_KEY = '@zones_goals';
 const RESTING_HR_HISTORY_KEY = '@zones_resting_hr_history';
+const SETTINGS_SNAPSHOTS_KEY = '@zones_settings_snapshots';
 
 interface AppState {
   // Settings
@@ -20,6 +21,10 @@ interface AppState {
   // Resting HR
   todayRestingHR: number | null; // Waking HR for today (from HealthKit)
   restingHRHistory: DailyRestingHR[]; // Historical daily resting HR values
+
+  // Per-day settings snapshots. The source of truth for zone calculations
+  // on past dates — locked the moment a date becomes "yesterday".
+  settingsSnapshots: DailySettingsSnapshot[];
 
   // Dashboard
   currentWeekOffset: number;
@@ -44,6 +49,13 @@ interface AppState {
   saveSettings: () => Promise<void>;
   loadRestingHRHistory: () => Promise<void>;
   saveRestingHRHistory: () => Promise<void>;
+  loadSettingsSnapshots: () => Promise<void>;
+  saveSettingsSnapshots: () => Promise<void>;
+  // Returns the saved snapshot for a date, or builds one from current
+  // state. For dates strictly in the past, the new snapshot is saved
+  // and locked so it never recomputes again. For today/future, returns
+  // a transient snapshot built from current settings.
+  getSettingsSnapshotForDate: (date: string) => DailySettingsSnapshot;
   resetToDefaults: () => void;
 }
 
@@ -57,6 +69,7 @@ const useStore = create<AppState>((set, get) => ({
   isHealthKitAuthorized: false,
   todayRestingHR: null,
   restingHRHistory: [],
+  settingsSnapshots: [],
   currentWeekOffset: 0,
   viewMode: 'daily',
   weeklyData: null,
@@ -182,6 +195,73 @@ const useStore = create<AppState>((set, get) => ({
     } catch (error) {
       console.error('Failed to save resting HR history:', error);
     }
+  },
+
+  loadSettingsSnapshots: async () => {
+    try {
+      const json = await AsyncStorage.getItem(SETTINGS_SNAPSHOTS_KEY);
+      if (json) {
+        const snapshots = JSON.parse(json) as DailySettingsSnapshot[];
+        set({settingsSnapshots: snapshots});
+      }
+    } catch (error) {
+      console.error('Failed to load settings snapshots:', error);
+    }
+  },
+
+  saveSettingsSnapshots: async () => {
+    try {
+      const {settingsSnapshots} = get();
+      await AsyncStorage.setItem(
+        SETTINGS_SNAPSHOTS_KEY,
+        JSON.stringify(settingsSnapshots),
+      );
+    } catch (error) {
+      console.error('Failed to save settings snapshots:', error);
+    }
+  },
+
+  getSettingsSnapshotForDate: (date: string) => {
+    const state = get();
+    const today = getLocalDateString();
+    const isPast = date < today;
+
+    const existing = state.settingsSnapshots.find(s => s.date === date);
+    if (existing) return existing;
+
+    // Build a snapshot from the best information we have for the date:
+    // historical resting HR if recorded, current max HR, current zones.
+    // Past max HR / zone intensities aren't tracked historically — they
+    // get the current values, with the understanding that this is a
+    // one-time backfill. After that the snapshot is locked.
+    const restingFromHistory = state.restingHRHistory.find(d => d.date === date);
+    const restingHR = restingFromHistory
+      ? restingFromHistory.restingHR
+      : (() => {
+          const prior = state.restingHRHistory
+            .filter(d => d.date < date)
+            .sort((a, b) => b.date.localeCompare(a.date));
+          return prior.length > 0
+            ? prior[0].restingHR
+            : state.settings.restingHeartRate;
+        })();
+
+    const snapshot: DailySettingsSnapshot = {
+      date,
+      restingHR,
+      maxHeartRate: state.settings.maxHeartRate,
+      // Deep copy so future updates to settings.zones don't mutate the snapshot.
+      zones: state.settings.zones.map(z => ({...z})),
+      locked: isPast,
+    };
+
+    if (isPast) {
+      set({settingsSnapshots: [...state.settingsSnapshots, snapshot]});
+      // Persist asynchronously; not awaited here because callers (per-day
+      // lookup loops) shouldn't block on disk writes for each lookup.
+      get().saveSettingsSnapshots();
+    }
+    return snapshot;
   },
 
   resetToDefaults: () =>

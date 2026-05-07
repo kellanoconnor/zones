@@ -18,7 +18,8 @@ import {
   aggregateZoneTime,
 } from '../services/ZoneEngine';
 import {getWorkoutsWithHeartRate} from '../services/HealthKitService';
-import {ZoneTimeEntry} from '../types';
+import {ZoneTimeEntry, WorkoutData} from '../types';
+import {getLocalDateString} from '../utils/constants';
 import {T, zoneColor} from '../utils/theme';
 
 const WEEKS_TO_SHOW = 8;
@@ -131,7 +132,7 @@ function SparklineChart({summaries}: {summaries: WeekSummary[]}) {
 
 // ─── Screen ──────────────────────────────────────────────────────────────────
 const TrendsScreen: React.FC = () => {
-  const {settings, isHealthKitAuthorized} = useStore();
+  const {settings, isHealthKitAuthorized, loadSettingsSnapshots, getSettingsSnapshotForDate} = useStore();
   const [summaries, setSummaries] = useState<WeekSummary[]>([]);
   const [isLoading, setIsLoading] = useState(false);
 
@@ -139,19 +140,37 @@ const TrendsScreen: React.FC = () => {
     if (!isHealthKitAuthorized) return;
     setIsLoading(true);
     try {
-      const boundaries = calculateZoneBoundaries(settings);
+      // Hydrate persisted snapshots before any per-day lookups so we
+      // don't accidentally re-snapshot dates that already have one.
+      await loadSettingsSnapshots();
       const results: WeekSummary[] = [];
       for (let offset = 0; offset > -WEEKS_TO_SHOW; offset--) {
         const weekStart = getWeekStart(offset);
         const weekEnd = getWeekEnd(weekStart);
         const workouts = await getWorkoutsWithHeartRate(weekStart, weekEnd);
-        const allZoneTimes: ZoneTimeEntry[][] = [];
+        // Group workouts by date so each day uses its own locked-in
+        // boundaries. Past days never recompute against current settings.
+        const byDay: Record<string, WorkoutData[]> = {};
         workouts.forEach(w => {
-          if (w.heartRateSamples.length > 0) {
-            allZoneTimes.push(
-              calculateZoneTime(w.heartRateSamples, boundaries, settings.zones),
-            );
-          }
+          const d = getLocalDateString(w.startDate);
+          if (!byDay[d]) byDay[d] = [];
+          byDay[d].push(w);
+        });
+        const allZoneTimes: ZoneTimeEntry[][] = [];
+        Object.entries(byDay).forEach(([date, dayWorkouts]) => {
+          const snap = getSettingsSnapshotForDate(date);
+          const boundaries = calculateZoneBoundaries({
+            maxHeartRate: snap.maxHeartRate,
+            restingHeartRate: snap.restingHR,
+            zones: snap.zones,
+          });
+          dayWorkouts.forEach(w => {
+            if (w.heartRateSamples.length > 0) {
+              allZoneTimes.push(
+                calculateZoneTime(w.heartRateSamples, boundaries, snap.zones),
+              );
+            }
+          });
         });
         const totals = aggregateZoneTime(allZoneTimes, settings.zones);
         const totalMinutes = totals.reduce((s, e) => s + e.minutes, 0);
@@ -177,6 +196,8 @@ const TrendsScreen: React.FC = () => {
     } finally {
       setIsLoading(false);
     }
+    // Zustand actions are stable refs; deps intentionally omit them.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settings, isHealthKitAuthorized]);
 
   useEffect(() => { loadTrends(); }, [loadTrends]);
