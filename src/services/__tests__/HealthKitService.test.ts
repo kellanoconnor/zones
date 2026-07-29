@@ -92,8 +92,8 @@ describe('getWorkouts', () => {
     ]);
 
     const workouts = await getWorkouts(
-      new Date('2026-04-07'),
-      new Date('2026-04-08'),
+      new Date(2026, 3, 7),
+      new Date(2026, 3, 8),
     );
 
     expect(workouts).toHaveLength(1);
@@ -105,8 +105,8 @@ describe('getWorkouts', () => {
   it('returns empty array when query returns null', async () => {
     mockQueryWorkoutSamples.mockResolvedValue(null);
     const workouts = await getWorkouts(
-      new Date('2026-04-07'),
-      new Date('2026-04-08'),
+      new Date(2026, 3, 7),
+      new Date(2026, 3, 8),
     );
     expect(workouts).toEqual([]);
   });
@@ -114,8 +114,8 @@ describe('getWorkouts', () => {
   it('returns empty array on error', async () => {
     mockQueryWorkoutSamples.mockRejectedValue(new Error('fail'));
     const workouts = await getWorkouts(
-      new Date('2026-04-07'),
-      new Date('2026-04-08'),
+      new Date(2026, 3, 7),
+      new Date(2026, 3, 8),
     );
     expect(workouts).toEqual([]);
   });
@@ -146,8 +146,8 @@ describe('getHeartRateSamples', () => {
   it('queries with correct unit', async () => {
     mockQueryQuantitySamples.mockResolvedValue([]);
     await getHeartRateSamples(
-      new Date('2026-04-07'),
-      new Date('2026-04-08'),
+      new Date(2026, 3, 7),
+      new Date(2026, 3, 8),
     );
 
     expect(mockQueryQuantitySamples).toHaveBeenCalledWith(
@@ -159,8 +159,8 @@ describe('getHeartRateSamples', () => {
   it('returns empty array on error', async () => {
     mockQueryQuantitySamples.mockRejectedValue(new Error('fail'));
     const samples = await getHeartRateSamples(
-      new Date('2026-04-07'),
-      new Date('2026-04-08'),
+      new Date(2026, 3, 7),
+      new Date(2026, 3, 8),
     );
     expect(samples).toEqual([]);
   });
@@ -186,8 +186,8 @@ describe('getWorkoutsWithHeartRate', () => {
     ]);
 
     const workouts = await getWorkoutsWithHeartRate(
-      new Date('2026-04-07'),
-      new Date('2026-04-08'),
+      new Date(2026, 3, 7),
+      new Date(2026, 3, 8),
     );
 
     expect(workouts).toHaveLength(1);
@@ -216,28 +216,31 @@ describe('getWakingHeartRate', () => {
       {startDate: '2026-04-08T06:35:00', quantity: 50},
     ]);
 
-    const hr = await getWakingHeartRate(new Date('2026-04-08'));
+    const hr = await getWakingHeartRate(new Date(2026, 3, 8));
     expect(hr).toBe(48); // Lowest in the window
   });
 
-  it('falls back to 4-7 AM window when no sleep data', async () => {
+  it('returns null when no overnight sleep session is found', async () => {
+    // No sleep samples — user didn't wear the watch overnight.
     mockQueryCategorySamples.mockResolvedValue([]);
-
+    // Even if there are morning HR samples, we should not fabricate a
+    // "resting" value from them; callers should fall back to a prior
+    // day's recorded value instead.
     mockQueryQuantitySamples.mockResolvedValue([
       {startDate: '2026-04-08T05:00:00', quantity: 55},
       {startDate: '2026-04-08T05:30:00', quantity: 51},
       {startDate: '2026-04-08T06:00:00', quantity: 58},
     ]);
 
-    const hr = await getWakingHeartRate(new Date('2026-04-08'));
-    expect(hr).toBe(51); // Lowest in 4-7 AM fallback
+    const hr = await getWakingHeartRate(new Date(2026, 3, 8));
+    expect(hr).toBeNull();
   });
 
   it('returns null when no HR samples available', async () => {
     mockQueryCategorySamples.mockResolvedValue([]);
     mockQueryQuantitySamples.mockResolvedValue([]);
 
-    const hr = await getWakingHeartRate(new Date('2026-04-08'));
+    const hr = await getWakingHeartRate(new Date(2026, 3, 8));
     expect(hr).toBeNull();
   });
 
@@ -245,24 +248,30 @@ describe('getWakingHeartRate', () => {
     mockQueryCategorySamples.mockResolvedValue([]);
     mockQueryQuantitySamples.mockResolvedValue(null);
 
-    const hr = await getWakingHeartRate(new Date('2026-04-08'));
+    const hr = await getWakingHeartRate(new Date(2026, 3, 8));
     expect(hr).toBeNull();
   });
 
   it('returns null on error', async () => {
     mockQueryCategorySamples.mockRejectedValue(new Error('fail'));
 
-    const hr = await getWakingHeartRate(new Date('2026-04-08'));
+    const hr = await getWakingHeartRate(new Date(2026, 3, 8));
     expect(hr).toBeNull();
   });
 
   it('rounds the result to nearest integer', async () => {
-    mockQueryCategorySamples.mockResolvedValue([]);
+    mockQueryCategorySamples.mockResolvedValue([
+      {
+        startDate: '2026-04-07T22:00:00',
+        endDate: '2026-04-08T06:30:00',
+        value: 1,
+      },
+    ]);
     mockQueryQuantitySamples.mockResolvedValue([
-      {startDate: '2026-04-08T05:00:00', quantity: 48.7},
+      {startDate: '2026-04-08T06:28:00', quantity: 48.7},
     ]);
 
-    const hr = await getWakingHeartRate(new Date('2026-04-08'));
+    const hr = await getWakingHeartRate(new Date(2026, 3, 8));
     expect(hr).toBe(49);
   });
 
@@ -275,15 +284,13 @@ describe('getWakingHeartRate', () => {
         value: 1,
       },
     ]);
-
-    // Fallback to 4-7 AM
     mockQueryQuantitySamples.mockResolvedValue([
       {startDate: '2026-04-08T05:00:00', quantity: 53},
     ]);
 
-    const hr = await getWakingHeartRate(new Date('2026-04-08'));
-    // Should use fallback since sleep ended on wrong day
-    expect(hr).toBe(53);
+    const hr = await getWakingHeartRate(new Date(2026, 3, 8));
+    // No valid overnight sleep for Apr 8 → null (no fallback).
+    expect(hr).toBeNull();
   });
 
   it('uses the latest overnight sleep session when multiple exist', async () => {
@@ -306,7 +313,7 @@ describe('getWakingHeartRate', () => {
       {startDate: '2026-04-08T07:02:00', quantity: 50},
     ]);
 
-    const hr = await getWakingHeartRate(new Date('2026-04-08'));
+    const hr = await getWakingHeartRate(new Date(2026, 3, 8));
     // Should pick lowest near 7 AM (latest overnight session), not 3 AM
     expect(hr).toBe(46);
   });
@@ -331,7 +338,7 @@ describe('getWakingHeartRate', () => {
       {startDate: '2026-04-08T06:32:00', quantity: 52},
     ]);
 
-    const hr = await getWakingHeartRate(new Date('2026-04-08'));
+    const hr = await getWakingHeartRate(new Date(2026, 3, 8));
     // Should use overnight wake time (6:30 AM), ignore the nap
     expect(hr).toBe(48);
   });
@@ -357,7 +364,7 @@ describe('getWakingHeartRate', () => {
       {startDate: '2026-04-08T05:50:00', quantity: 50},
     ]);
 
-    const hr = await getWakingHeartRate(new Date('2026-04-08'));
+    const hr = await getWakingHeartRate(new Date(2026, 3, 8));
     // Should use 5:45 AM wake time from overnight sleep, not 11 AM nap wake
     expect(hr).toBe(45);
   });
@@ -367,21 +374,32 @@ describe('getWakingHeartRate', () => {
 
 describe('getWakingHRAverage', () => {
   it('averages readings across available days', async () => {
-    // Mock sleep data for each call
-    mockQueryCategorySamples.mockResolvedValue([]);
+    // Return a valid overnight sleep session for whatever morning is
+    // being queried, so getWakingHeartRate follows the sleep-based path
+    // for each of the N days in the iteration.
+    mockQueryCategorySamples.mockImplementation((_type: any, options: any) => {
+      const filterEnd: Date = options.filter.date.endDate; // noon local of target day
+      const wakeAt = new Date(filterEnd);
+      wakeAt.setHours(6, 30, 0, 0);
+      const sleptAt = new Date(wakeAt);
+      sleptAt.setDate(wakeAt.getDate() - 1);
+      sleptAt.setHours(22, 0, 0, 0);
+      return Promise.resolve([
+        {startDate: sleptAt.toISOString(), endDate: wakeAt.toISOString(), value: 1},
+      ]);
+    });
 
-    // Return different HR values for sequential calls
+    // Return HR samples in the wake window for the first 3 days, empty for the rest.
     let callCount = 0;
-    mockQueryQuantitySamples.mockImplementation(() => {
+    mockQueryQuantitySamples.mockImplementation((_type: any, options: any) => {
       callCount++;
-      // Alternate between having data and not
       if (callCount <= 3) {
-        // Days 1-3 have data: 48, 50, 52
+        // Any timestamp inside the query window works; use midpoint.
+        const start: Date = options.filter.date.startDate;
         return Promise.resolve([
-          {startDate: '2026-04-08T05:00:00', quantity: 46 + callCount * 2},
+          {startDate: start.toISOString(), quantity: 46 + callCount * 2},
         ]);
       }
-      // Days 4-7 have no data
       return Promise.resolve([]);
     });
 
@@ -417,17 +435,27 @@ describe('getWakingHRAverage', () => {
   });
 
   it('rounds the average to nearest integer', async () => {
-    mockQueryCategorySamples.mockResolvedValue([]);
+    mockQueryCategorySamples.mockImplementation((_type: any, options: any) => {
+      const filterEnd: Date = options.filter.date.endDate;
+      const wakeAt = new Date(filterEnd);
+      wakeAt.setHours(6, 30, 0, 0);
+      const sleptAt = new Date(wakeAt);
+      sleptAt.setDate(wakeAt.getDate() - 1);
+      sleptAt.setHours(22, 0, 0, 0);
+      return Promise.resolve([
+        {startDate: sleptAt.toISOString(), endDate: wakeAt.toISOString(), value: 1},
+      ]);
+    });
 
     let callCount = 0;
-    mockQueryQuantitySamples.mockImplementation(() => {
+    mockQueryQuantitySamples.mockImplementation((_type: any, options: any) => {
       callCount++;
-      // 3 readings: 47, 48, 49 → avg 48
-      // Or 47, 48, 50 → avg 48.33 → 48
+      // 3 readings: 47, 48, 50 → avg 48.33 → 48
       const values = [47, 48, 50];
       if (callCount <= 3) {
+        const start: Date = options.filter.date.startDate;
         return Promise.resolve([
-          {startDate: '2026-04-08T05:00:00', quantity: values[callCount - 1]},
+          {startDate: start.toISOString(), quantity: values[callCount - 1]},
         ]);
       }
       return Promise.resolve([]);

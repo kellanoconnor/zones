@@ -40,6 +40,7 @@ interface AppState {
   setHealthKitAuthorized: (authorized: boolean) => void;
   setTodayRestingHR: (hr: number | null) => void;
   setDailyRestingHR: (date: string, restingHR: number) => void;
+  clearDailyRestingHR: (date: string) => void;
   getRestingHRForDate: (date: string) => number;
   setCurrentWeekOffset: (offset: number) => void;
   setViewMode: (mode: ViewMode) => void;
@@ -125,6 +126,17 @@ const useStore = create<AppState>((set, get) => ({
           ...filtered,
           {date, restingHR, locked: date < today},
         ],
+      };
+    }),
+
+  clearDailyRestingHR: (date: string) =>
+    set(state => {
+      const existing = state.restingHRHistory.find(d => d.date === date);
+      // Don't remove locked entries — they represent a committed
+      // historical value even if it was later determined to be dubious.
+      if (existing && existing.locked) return state;
+      return {
+        restingHRHistory: state.restingHRHistory.filter(d => d.date !== date),
       };
     }),
 

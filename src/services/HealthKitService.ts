@@ -139,8 +139,9 @@ export async function getWorkoutsWithHeartRate(
  * Uses sleep analysis to find wake time, then queries HR samples
  * in a 10-minute window around waking to find the lowest reading.
  *
- * Falls back to early-morning (4-7 AM) lowest HR if no sleep data.
- * Returns null if no data available.
+ * Returns null if there is no valid overnight sleep session or no HR
+ * samples in the window. Callers should fall back to a prior day's
+ * value rather than fabricating a resting HR from morning activity.
  */
 export async function getWakingHeartRate(
   date: Date,
@@ -190,20 +191,18 @@ export async function getWakingHeartRate(
       }
     }
 
-    let hrWindowStart: Date;
-    let hrWindowEnd: Date;
-
-    if (wakeTime) {
-      // Query HR in a 10-minute window around wake time
-      hrWindowStart = new Date(wakeTime.getTime() - 5 * 60 * 1000);
-      hrWindowEnd = new Date(wakeTime.getTime() + 10 * 60 * 1000);
-    } else {
-      // Fallback: query early morning HR (4-7 AM)
-      hrWindowStart = new Date(dayStart);
-      hrWindowStart.setHours(4, 0, 0, 0);
-      hrWindowEnd = new Date(dayStart);
-      hrWindowEnd.setHours(7, 0, 0, 0);
+    // No valid overnight sleep → we can't know the "waking" HR. Return
+    // null so the caller falls back to the prior day's recorded value
+    // instead of picking a low reading from a random morning-activity
+    // window (which produced obviously-wrong resting HRs on no-watch
+    // nights).
+    if (!wakeTime) {
+      return null;
     }
+
+    // Query HR in a 10-minute window around wake time
+    const hrWindowStart = new Date(wakeTime.getTime() - 5 * 60 * 1000);
+    const hrWindowEnd = new Date(wakeTime.getTime() + 10 * 60 * 1000);
 
     const hrSamples = await queryQuantitySamples(
       HEART_RATE_TYPE as any,

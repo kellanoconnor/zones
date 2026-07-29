@@ -36,6 +36,8 @@ const DashboardScreen: React.FC = () => {
     setIsLoading,
     setTodayRestingHR,
     setDailyRestingHR,
+    clearDailyRestingHR,
+    getRestingHRForDate,
     saveRestingHRHistory,
     loadRestingHRHistory,
     loadSettingsSnapshots,
@@ -77,6 +79,12 @@ const DashboardScreen: React.FC = () => {
       if (wakingHR !== null) {
         setTodayRestingHR(wakingHR);
         setDailyRestingHR(todayStr, wakingHR);
+      } else {
+        // No reliable waking HR for today (e.g. watch not worn overnight).
+        // Clear any stale entry (including one written by the old 4-7 AM
+        // fallback) and pull the prior day's value into today's display.
+        clearDailyRestingHR(todayStr);
+        setTodayRestingHR(getRestingHRForDate(todayStr));
       }
       await saveRestingHRHistory();
     } catch (e) {
