@@ -46,10 +46,20 @@ fi
 # identifiers for the same device, so extract both:
 #   hardwareProperties.udid -> xcodebuild -destination 'id=…'
 #   identifier              -> xcrun devicectl --device …
-DEVICE_INFO="$(xcrun devicectl list devices --json-output - 2>/dev/null \
-  | python3 -c '
+DEVICECTL_JSON="$(xcrun devicectl list devices --json-output - 2>/dev/null || true)"
+if [ -z "$DEVICECTL_JSON" ]; then
+  echo "❌ 'xcrun devicectl list devices' produced no output." >&2
+  echo "   Try running it manually to see the real error, then retry." >&2
+  exit 1
+fi
+
+DEVICE_INFO="$(printf '%s' "$DEVICECTL_JSON" | python3 -c '
 import json, sys
-data = json.load(sys.stdin)
+try:
+    data = json.load(sys.stdin)
+except json.JSONDecodeError:
+    sys.stderr.write("devicectl output was not valid JSON\n")
+    sys.exit(2)
 for d in data.get("result", {}).get("devices", []):
     if d.get("connectionProperties", {}).get("pairingState") != "paired":
         continue
